@@ -109,19 +109,50 @@
 (defun untype-everything (sexpr)
   (tree-map #'(lambda (string) (mk-untyped string)) sexpr))
 
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; default fail transformer
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
 (defmethod inform ((object basic-object)
-                   (transformer-name string)
+                   (transformer-name symbol)
                    (whoami symbol))
   (error "object with value {~A} doesn't implement 'inform' on ~A"
          (basic-object-value object) transformer-name))
 
 (defmethod pass ((object basic-object)
-                 (transformer-name string)
-                 (whoami (eql 'arg)))
+                 (transformer-name symbol)
+                 (args list))
   (error "object with value {~A} doesn't implement 'pass' on ~A"
          (basic-object-value object) transformer-name))
 
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;    noop transformer
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;; 
+
+(defmethod inform ((object basic-object)
+                   (transformer-name (eql 'noop))
+                   (whoami (eql 'arg)))
+  (cons nil object))
+
+(defmethod inform ((object basic-object)
+                   (transformer-name (eql 'noop))
+                   (whoami (eql 'lead)))
+  t)
+
+(defmethod pass ((object basic-object)
+                 (transformer-name (eql 'noop))
+                 (args list))
+  (cons nil (append (list object) args)))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;     infrastructure
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
 (defun back-talk-arg (transformer expr)
+  (declare (optimize debug))
   (assert (typep expr 'atom))
   ;; response : (transform-more? . sexpr)
   (let ((response (inform expr (transformer-name transformer) 'arg)))
@@ -142,8 +173,8 @@
       ;; response : (transform-more? . sexpr)
       (let ((response-2 (pass lead (transformer-name transformer) args)))
         (if (car response-2)
-            (transform transformer (cdr response))
-            (cdr response)))))
+            (transform transformer (cdr response-2))
+            (cdr response-2)))))
 
 ;;; transform a single expression {sexpression, atom}
 (defun transform (transformer expr)
@@ -265,6 +296,9 @@
 
 (deftest test-noop-transform
   (let ((noop-transformer (make-transformer :name 'noop))
-        (expr '(1 2 3 4 5)))
-    (equal (transform noop-transformer expr) expr)))
+        (untyped-expr (untype-everything
+                        (tokenize
+                          (next-char-factory "(1 2 3 4 5)")))))
+    (eq-tree (transform noop-transformer untyped-expr) untyped-expr
+             :test #'eq-object)))
 
