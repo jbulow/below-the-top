@@ -5,6 +5,15 @@
 ;;;; > tokenizer, produces sexpressions from a string literal
 ;;;; > translation manager, translations against sexpressions
 
+;;;; TODO
+;;;; > How do we handle environments?
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;          Tokenizor
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
 (defun whitespace? (c)
   (member c '(#\Backspace #\Tab #\Newline #\Linefeed #\Page #\Space)))
 
@@ -70,6 +79,78 @@
                     (t (elt expr count)))
             (when do-inc
               (incf count))))))))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;    Transformation Manager
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; > each type of object must be able to handle each type of
+;;;;   transformation
+
+(defstruct transformer
+  name)
+
+(defclass basic-object ()
+  ((value :accessor basic-object-value
+          :initarg :value)))
+
+(defclass untyped-object (basic-object)
+  ())
+
+(defun mk-untyped (value)
+  (make-instance 'untyped-object :value value))
+
+(defmethod eq-object ((lhs untyped-object) (rhs untyped-object))
+  (equal (basic-object-value lhs) (basic-object-value rhs)))
+
+;;; sexpr : should be a (possibly nested) list of string literals
+(defun untype-everything (sexpr)
+  (tree-map #'(lambda (string) (mk-untyped string)) sexpr))
+
+(defmethod inform ((object basic-object)
+                   (transformer-name string)
+                   (whoami symbol))
+  (error "object with value {~A} doesn't implement 'inform' on ~A"
+         (basic-object-value object) transformer-name))
+
+(defmethod pass ((object basic-object)
+                 (transformer-name string)
+                 (whoami (eql 'arg)))
+  (error "object with value {~A} doesn't implement 'pass' on ~A"
+         (basic-object-value object) transformer-name))
+
+(defun back-talk-arg (transformer expr)
+  (assert (typep expr 'atom))
+  ;; response : (transform-more? . sexpr)
+  (let ((response (inform expr (transformer-name transformer) 'arg)))
+    (if (car response)
+        (transform transformer (cdr response))
+        (cdr response))))
+
+(defun back-talk-sexpr (transformer lead &key expr-args)
+  (declare (optimize debug))
+  (assert (typep expr-args 'list))
+  ;; response : can-i-talk-to-your-arguments?
+  (let* ((response (inform lead (transformer-name transformer) 'lead))
+         (args (mapcar #'(lambda (a)
+                           (if response
+                               (transform transformer a)
+                               (identity a)))
+                       expr-args)))
+      ;; response : (transform-more? . sexpr)
+      (let ((response-2 (pass lead (transformer-name transformer) args)))
+        (if (car response-2)
+            (transform transformer (cdr response))
+            (cdr response)))))
+
+;;; transform a single expression {sexpression, atom}
+(defun transform (transformer expr)
+  (cond ((atom expr) (back-talk-arg transformer expr))
+        ((null expr) '())
+        (t
+          (back-talk-sexpr transformer (car expr) :expr-args (cdr expr)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -138,7 +219,6 @@
            (funcall next-char-fn 'unread)
            (char= (funcall next-char-fn 'peek) #\o)))))
 
-
 (deftest test-tokenize-parenlist
   (let ((next-char-fn (next-char-factory "(big fast (cars) are fast)")))
     (and (equal (tokenize-parenlist next-char-fn)
@@ -173,4 +253,18 @@
          (progn
            (remove-trailing-paren next-char-fn-2)
            (char= (funcall next-char-fn-2) #\B)))))
+
+(deftest test-untype-everything
+  (let ((next-char-fn
+          (next-char-factory " (this (should (be ) untyped) )"))
+        (output (list (mk-untyped "this") (list (mk-untyped "should")
+                                                (list (mk-untyped "be"))
+                                                (mk-untyped "untyped")))))
+    (eq-tree (untype-everything (tokenize next-char-fn)) output
+             :test #'eq-object)))
+
+(deftest test-noop-transform
+  (let ((noop-transformer (make-transformer :name 'noop))
+        (expr '(1 2 3 4 5)))
+    (equal (transform noop-transformer expr) expr)))
 
