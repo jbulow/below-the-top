@@ -7,6 +7,8 @@
 
 ;;;; TODO
 ;;;; > How do we handle environments?
+;;;;   + global and local environments; global environments must be shared
+;;;;     between unconnected sexpressions
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -27,14 +29,14 @@
           ((whitespace? c) (remove-trailing-paren next-char-fn))
           (t (error "remove-trailing-paren has unexpected character!")))))
 
-(defun tokenize-parenlist (next-char-fn)
+(defun tokenize-parenlist (next-char-fn read-table)
   (declare (optimize debug))
   (let ((c (funcall next-char-fn))
         (exprs '()))
     (assert (char= c #\())
     (do ((char (funcall next-char-fn 'peek) (funcall next-char-fn 'peek)))
         ((char= char #\)) exprs)
-      (let ((e (tokenize next-char-fn)))
+      (let ((e (tokenize next-char-fn read-table)))
         (unless (zerop (length e))
           (push e exprs))))
     (remove-trailing-paren next-char-fn)
@@ -53,14 +55,17 @@
           (t (tokenize-characters next-char-fn (scat so-far c))))))
 
 ;;;; Tokenizes a single sexpr
-(defun tokenize (next-char-fn)
+;;;; > FIXME: we could treat #\( as a macro character
+(defun tokenize (next-char-fn &optional read-table)
   (declare (optimize debug))
   (let ((c (funcall next-char-fn)))
     (cond ((null c) '())
           ((char= c #\()
            (funcall next-char-fn 'unread)
-           (tokenize-parenlist next-char-fn))
-          ((whitespace? c) (tokenize next-char-fn))
+           (tokenize-parenlist next-char-fn read-table))
+          ((whitespace? c) (tokenize next-char-fn read-table))
+          ((read-macro? c read-table)
+           (funcall (read-macro-fn c read-table) next-char-fn read-table))
           (t (funcall next-char-fn 'unread)
              (tokenize-characters next-char-fn)))))
 
@@ -79,6 +84,24 @@
                     (t (elt expr count)))
             (when do-inc
               (incf count))))))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;       read macros
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defun unquote-handler (next-char-fn read-table)
+  (let ((next-char (funcall next-char-fn 'peek)))
+    (cond ((char= #\@ next-char)
+           (funcall next-char-fn)
+           (list "unquote-splicing" (tokenize next-char-fn read-table)))
+          (t (list "unquote" (tokenize next-char-fn read-table))))))
+
+(defun read-macro? (c read-table)
+  (assoc c read-table :test #'char=))
+
+(defun read-macro-fn (c read-table)
+  (assert (read-macro? c read-table))
+  (cdr (assoc c read-table)))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -116,7 +139,7 @@
 
 (defmethod inform ((object basic-object)
                    (transformer-name symbol)
-                   (whoami symbol))
+                   (whatami symbol))
   (error "object with value {~A} doesn't implement 'inform' on ~A"
          (basic-object-value object) transformer-name))
 
@@ -133,12 +156,12 @@
 
 (defmethod inform ((object basic-object)
                    (transformer-name (eql 'noop))
-                   (whoami (eql 'arg)))
+                   (whatami (eql 'arg)))
   (cons nil object))
 
 (defmethod inform ((object basic-object)
                    (transformer-name (eql 'noop))
-                   (whoami (eql 'lead)))
+                   (whatami (eql 'lead)))
   t)
 
 (defmethod pass ((object basic-object)
@@ -252,7 +275,7 @@
 
 (deftest test-tokenize-parenlist
   (let ((next-char-fn (next-char-factory "(big fast (cars) are fast)")))
-    (and (equal (tokenize-parenlist next-char-fn)
+    (and (equal (tokenize-parenlist next-char-fn nil)
                 '("big" "fast" ("cars") "are" "fast")))))
 
 (deftest test-tokenize-characters
@@ -265,7 +288,7 @@
 (deftest test-tokenize-characters-paren-bug
   (let ((next-char-fn (next-char-factory "some-expr)")))
     (and (equal (tokenize-characters next-char-fn) "some-expr")
-         (char= (funcall next-char-fn 'peak) #\))
+         (char= (funcall next-char-fn 'peek) #\))
          (equal (tokenize-characters next-char-fn) "")
          (equal (tokenize-characters next-char-fn) ""))))
 
@@ -301,4 +324,27 @@
                           (next-char-factory "(1 2 3 4 5)")))))
     (eq-tree (transform noop-transformer untyped-expr) untyped-expr
              :test #'eq-object)))
+
+(deftest test-unquote-handler
+  (let ((next-char-fn
+          (next-char-factory ",something")))
+    (funcall next-char-fn)
+    (equal (unquote-handler next-char-fn nil)
+           '("unquote" "something"))))
+
+(deftest test-desugar
+  (let ((next-char-fn
+          (next-char-factory "(this ,@(is text) ,so is ,,this)"))
+        (read-table '((#\, . unquote-handler))))
+    (equal (tokenize next-char-fn read-table)
+           '("this" ("unquote-splicing" ("is" "text")) ("unquote" "so")
+             "is" ("unquote" ("unquote" "this"))))))
+
+(deftest test-next-char-factory-peek-bug
+  (let ((next-char-fn
+          (next-char-factory "something")))
+    (progn (equal (funcall next-char-fn) #\s)
+         (equal (funcall next-char-fn 'peek) #\o)
+         (equal (funcall next-char-fn 'peek) #\o)
+         (equal (funcall next-char-fn) #\o))))
 
