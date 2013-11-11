@@ -205,20 +205,28 @@
 
 (defclass maru-env ()
   ((bindings :accessor maru-env-bindings
-             :initarg  :bindings)
+             :initarg  :bindings
+             :initform '())
    (parent :accessor maru-env-parent
            :initarg   :parent
+           :initform  nil
            :type maru-env)))
 
 (defstruct maru-context
   env
   symbols)
 
-(defun maru-mk-empty-ctx ()
+(defun maru-mk-ctx (&key parent)
   (let ((env (make-instance 'maru-env
                 :bindings nil
-                :parent nil)))
+                :parent parent)))
     (make-maru-context :env env :symbols nil)))
+
+(defun maru-parent-ctx (ctx)
+  (let ((new-ctx (copy-structure ctx)))
+    (setf (maru-context-env new-ctx)
+          (maru-env-parent (maru-context-env ctx)))
+    new-ctx))
 
 (defun maru-intern (ctx text)
   (let ((symbol (mk-symbol text)))
@@ -226,18 +234,22 @@
 
 (defun maru-define (ctx symbol obj)
   (assert (typep symbol 'symbol-object))
-  ; (when (maru-lookup ctx symbol)
-    ; (warn-me "redefining symbol"))
+  (when (maru-lookup ctx symbol)
+    (warn-me "redefining symbol"))
   (car (push (cons symbol obj)
              (maru-env-bindings (maru-context-env ctx)))))
 
 (defun maru-lookup (ctx symbol)
-  (unless (assoc symbol (maru-context-symbols ctx))
-    (error "this symbol has not been interned!"))
+  (unless (member symbol (maru-context-symbols ctx) :test #'eq-object)
+    (error (format nil "symbol ~A has not been interned!"
+                       (object-value symbol))))
   (labels ((l-up (env)
-             (cond ((null env) nil)
-                   ((assoc symbol env) (cdr (assoc symbol env)))
-                   (t (l-up (maru-env-parent env))))))
+             (when (null env)
+               (return-from l-up nil))
+             (let ((bins (maru-env-bindings env)))
+               (cond ((assoc symbol bins :test #'eq-object)
+                      (cdr (assoc symbol bins :test #'eq-object)))
+                     (t (l-up (maru-env-parent env)))))))
     (l-up (maru-context-env ctx))))
 
 ;;; intern primitives and add their bindings to global env
@@ -294,6 +306,15 @@
 
 (defun mk-char (value)
   (make-instance 'char-object :value value))
+
+(defmethod eq-object ((lhs basic-object) (rhs (eql nil)))
+  nil)
+
+(defmethod eq-object ((lhs (eql nil)) (rhs basic-object))
+  nil)
+
+(defmethod eq-object ((lhs (eql nil)) (rhs (eql nil)))
+  t)
 
 (defmethod eq-object ((lhs single-value-object) (rhs single-value-object))
   (equal (object-value lhs) (object-value rhs)))
@@ -518,7 +539,7 @@
              :test #'eq-object)))
 
 (deftest test-maru-intern
-  (let* ((ctx (maru-mk-empty-ctx))
+  (let* ((ctx (maru-mk-ctx))
          (out-sym (mk-symbol "hello-world"))
          (test-sym nil))
     (setf test-sym (maru-intern ctx "hello-world"))
@@ -528,7 +549,7 @@
          (= 0 (length (maru-env-bindings (maru-context-env ctx)))))))
 
 (deftest test-maru-define
-  (let* ((ctx (maru-mk-empty-ctx))
+  (let* ((ctx (maru-mk-ctx))
          (obj (mk-number "4001"))
          (sym-string "neverneverneverland")
          (test-out (cons (mk-symbol sym-string) obj))
@@ -538,6 +559,34 @@
          (eq-object (cdr out) (cdr test-out))
          (= 1 (length (maru-context-symbols ctx)))
          (= 1 (length (maru-env-bindings (maru-context-env ctx)))))))
+
+(deftest test-maru-lookup
+  (let* ((ctx (maru-mk-ctx :parent (make-instance 'maru-env
+                                     :bindings nil
+                                     :parent nil)))
+         (obj (mk-number "43"))
+         (sym "some-symbol")
+         (obj2 (mk-string "thisandthat"))
+         (sym2 "another-symbol")
+         (obj3 (mk-string "ballll"))
+         (sym3 "in")
+         (s3 nil)
+         (doesntexist (maru-intern ctx "blahblah")))
+    (maru-define ctx (maru-intern ctx sym) obj)
+    (maru-define ctx (maru-intern ctx sym2) obj2)
+
+    (setf s3 (maru-intern ctx sym3))
+    (maru-define (maru-parent-ctx ctx) s3 obj3)
+
+    (and (eq-object obj (maru-lookup ctx (mk-symbol sym)))
+         (eq nil (maru-lookup (maru-parent-ctx ctx) (mk-symbol sym)))
+         (eq-object obj2 (maru-lookup ctx (mk-symbol sym2)))
+         (eq nil (maru-lookup (maru-parent-ctx ctx) (mk-symbol sym2)))
+         (eq-object obj3 (maru-lookup ctx (mk-symbol sym3)))
+         (eq-object obj3
+                    (maru-lookup (maru-parent-ctx ctx) (mk-symbol sym3)))
+         (eq nil (maru-lookup ctx doesntexist))
+         (eq nil (maru-lookup (maru-parent-ctx ctx) doesntexist)))))
 
 (deftest test-initialize-simple-maru
   (let ((env (initialize-maru)))
