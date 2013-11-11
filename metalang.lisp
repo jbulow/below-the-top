@@ -9,6 +9,9 @@
 ;;;; > How do we handle environments?
 ;;;;   + global and local environments; global environments must be shared
 ;;;;     between unconnected sexpressions
+;;;; > How do we want to handle lists? Do we want to support eval_pair like
+;;;    behavior in our infrastructure? Does it even make sense in our
+;;;    model?
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -150,9 +153,17 @@
                                               (scat "#x" value)
                                               value))))
 
-(defun mk-string (&rest args)
-  (declare (ignore args))
-  (error "implement mk-string"))
+(defclass string-object (single-value-object)
+  ())
+
+(defun mk-string (value)
+  (make-instance 'string-object :value value))
+
+(defclass char-object (single-value-object)
+  ())
+
+(defun mk-char (value)
+  (make-instance 'char-object :value value))
 
 (defmethod eq-object ((lhs single-value-object) (rhs single-value-object))
   (equal (object-value lhs) (object-value rhs)))
@@ -214,7 +225,7 @@
          (len (length val))
          (first-char (char val 0)))
     (cond ((char= #\" first-char)                   ; string
-           (cons nil (mk-string (subseq val 1 len))))
+           (cons nil (mk-string (subseq val 1 (1- len)))))
           ((alpha-char-p first-char) (cons nil (mk-symbol val)))
           ((digit-char-p first-char)
            (cons nil
@@ -223,7 +234,9 @@
                        (assert (> len 2))
                        (mk-number (subseq val 2 len) :hex t))
                      (mk-number val))))
-          (t (error "unsure how to do type conversion?")))))
+          ((char= #\? first-char)
+           (cons nil (mk-char (char val 1))))
+          (t (error "unsure how to do type conversion")))))
 
 (defmethod inform ((object untyped-object)
                    (transformer-name (eql 'type))
@@ -431,8 +444,7 @@
     (eq-tree (transform type-transformer untyped-expr nil) typed-expr
              :test #'eq-object)))
 
-;;; FIXME: write tests for chars, strings and nonhex numbers.
-(deftest test-type-transformer-hex
+(deftest test-type-transformer-number
   (let ((type-transformer (make-transformer :name 'type))
         (untyped-expr (untype-everything
                         (tokenize
@@ -441,6 +453,19 @@
         (typed-expr (list (mk-symbol "trees") (mk-number "123" :hex t)
                           (list (mk-symbol "green") (mk-number "2"))
                           (mk-number "456" :hex t))))
+    (eq-tree (transform type-transformer untyped-expr nil) typed-expr
+             :test #'eq-object)))
+
+(deftest test-type-transform-char-and-string
+  (let ((type-transformer (make-transformer :name 'type))
+        (untyped-expr (untype-everything
+                        (tokenize
+                          (next-char-factory
+                            "(running \"man\" ?r (u ?n \"s\") ?!)"))))
+        (typed-expr
+          (list (mk-symbol "running") (mk-string "man") (mk-char #\r)
+                (list (mk-symbol "u") (mk-char #\n) (mk-string "s"))
+                (mk-char #\!))))
     (eq-tree (transform type-transformer untyped-expr nil) typed-expr
              :test #'eq-object)))
 
