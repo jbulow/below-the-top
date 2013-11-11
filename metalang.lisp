@@ -413,7 +413,7 @@
          (first-char (char val 0)))
     (cond ((char= #\" first-char)                   ; string
            (cons nil (mk-string (subseq val 1 (1- len)))))
-          ((alpha-char-p first-char) (cons nil (mk-symbol val)))
+          ((alpha-char-p first-char) (cons nil (maru-intern *ctx* val)))
           ((digit-char-p first-char)
            (cons nil
                  (if (and (>= len 2) (char-equal #\x (char val 1)))
@@ -433,7 +433,8 @@
 (defmethod pass ((object untyped-object)
                  (transformer-name (eql 'type))
                  (args list))
-  (cons nil (append (list (mk-symbol (object-value object))) args)))
+  (cons nil (append (list (maru-intern *ctx* (object-value object)))
+                    args)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;  maru evalutator transformer
@@ -696,6 +697,31 @@
          (= 1 (length (maru-context-symbols ctx)))
          (= 0 (length (maru-env-bindings (maru-context-env ctx)))))))
 
+(deftest test-intern-symbols-when-typing
+  (let ((type-transformer (make-transformer :name 'type))
+        (untyped-expr (untype-everything
+                        (tokenize
+                          (next-char-factory
+                            "(type these (symbols 123) \"please\" kk)"))))
+        (ctx (maru-mk-ctx))
+        (out nil))
+    (setf out (transform type-transformer untyped-expr ctx))
+    (and (= 0 (length (maru-env-bindings (maru-context-env ctx))))
+         (null (maru-env-parent (maru-context-env ctx)))
+         (= 4 (length (maru-context-symbols ctx)))
+         (member (mk-symbol "type") (maru-context-symbols ctx)
+                 :test #'eq-object)
+         (member (mk-symbol "these") (maru-context-symbols ctx)
+                 :test #'eq-object)
+         (member (mk-symbol "symbols") (maru-context-symbols ctx)
+                 :test #'eq-object)
+         (not (member (mk-symbol "123") (maru-context-symbols ctx)
+                 :test #'eq-object))
+         (not (member (mk-symbol "please") (maru-context-symbols ctx)
+                 :test #'eq-object))
+         (member (mk-symbol "kk") (maru-context-symbols ctx)
+                 :test #'eq-object))))
+
 (deftest test-maru-define
   (let* ((ctx (maru-mk-ctx))
          (obj (mk-number "4001"))
@@ -758,6 +784,19 @@
     (and (eq-object a (car out))
          (eq-object b (cdr out)))))
 
+(deftest test-maru-eval-transform-simple
+  (let* ((ctx (maru-mk-ctx))
+         (eval-transformer (make-transformer :name 'eval))
+         (untyped-expr (untype-everything
+                         (tokenize
+                           (next-char-factory "(cons \"kewl\" 22)"))))
+         (type-transformer (make-transformer :name 'type))
+         (typed-expr (transform type-transformer untyped-expr ctx))
+         (out nil))
+    (setf out (transform eval-transformer typed-expr ctx))
+    (and (eq-object (car out) (mk-string "kewl"))
+         (eq-object (cdr out) (mk-number "22")))))
+
 (deftest test-maru-primitive-if-simple
   (let ((ctx (maru-initialize)))
     (eq-object (mk-number "12")
@@ -782,4 +821,5 @@
 (deftest test-applicator-from-internal
   "should be able to take an applicator and get it's internal function"
   nil)
+
 
