@@ -165,7 +165,7 @@
   ;; response : (transform-more? . sexpr)
   (let ((response (inform expr (transformer-name transformer) 'arg)))
     (if (car response)
-        (transform transformer (cdr response) *env*)
+        (transform transformer (cdr response) *ctx*)
         (cdr response))))
 
 (defun back-talk-sexpr (transformer lead &key expr-args)
@@ -175,20 +175,20 @@
   (let* ((response (inform lead (transformer-name transformer) 'lead))
          (args (mapcar #'(lambda (a)
                            (if response
-                               (transform transformer a *env*)
+                               (transform transformer a *ctx*)
                                (identity a)))
                        expr-args)))
       ;; response : (transform-more? . sexpr)
       (let ((response-2
               (pass lead (transformer-name transformer) args)))
         (if (car response-2)
-            (transform transformer (cdr response-2) *env*)
+            (transform transformer (cdr response-2) *ctx*)
             (cdr response-2)))))
 
 ;;; transform a single expression {sexpression, atom}
-(defun transform (transformer expr env)
-  (let ((*env* env))
-    (declare (special *env*))
+(defun transform (transformer expr ctx)
+  (let ((*ctx* ctx))
+    (declare (special *ctx*))
     (cond ((atom expr) (back-talk-arg transformer expr))
           ((null expr) '())
           (t
@@ -252,9 +252,64 @@
                      (t (l-up (maru-env-parent env)))))))
     (l-up (maru-context-env ctx))))
 
-;;; intern primitives and add their bindings to global env
-(defun initialize-maru ()
+;;; > intern primitives and add their bindings to global env
+;;; > add runtime compositioners
+;;;     + *expanders*   : []
+;;;     + *evaluators*  : [eval-symbol]
+;;;     + *applicators* : [apply-fixed, apply-expr]
+(defun maru-initialize ()
+  (let ((ctx (maru-mk-ctx)))
+    ;; primitives
+    (maru-define ctx (maru-intern ctx "if")
+                     (mk-fixed #'maru-primitive-if))
+    (maru-intern ctx "t")
+    (maru-define ctx (maru-intern ctx "cons")
+                     (mk-expr #'maru-primitive-cons))
+    (maru-define ctx (maru-intern ctx "car")
+                     (mk-expr #'maru-primitive-car))
+    (maru-define ctx (maru-intern ctx "cdr")
+                     (mk-expr #'maru-primitive-cdr))
+
+    ;; compositioners
+    (maru-define ctx (maru-intern ctx "*expanders*") (mk-array 32))
+    (maru-define ctx (maru-intern ctx "*evaluators*") (mk-array 32))
+    (maru-define ctx (maru-intern ctx "*applicators*") (mk-array 32))
+
+    ctx))
+
+(defun maru-eval (ctx expr)
+  (declare (ignore ctx expr))
   nil)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;      maru primitives
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+; fixed
+(defun maru-primitive-if (ctx &rest args)
+  (let ((test (car args))
+        (then (cadr args))
+        (else (cddr args)))
+    (if (maru-eval ctx test)
+        (maru-eval ctx then)
+        (maru-eval ctx else))))
+
+; expr
+(defun maru-primitive-cons (ctx &rest args)
+  (declare (ignore ctx))
+  (assert (= 2 (length args)))
+  (cons (car args) (cadr args)))
+
+; expr
+(defun maru-primitive-car (ctx &rest args)
+  (declare (ignore ctx args))
+  nil)
+
+; expr
+(defun maru-primitive-cdr (ctx &rest args)
+  (declare (ignore ctx args))
+  nil)
+
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;  maru type transformer
@@ -307,6 +362,29 @@
 (defun mk-char (value)
   (make-instance 'char-object :value value))
 
+(defclass array-object (basic-object)
+  ((elements :accessor array-object-elements
+             :initarg  :elements)))
+
+(defun mk-array (size)
+  (make-instance 'array-object :elements (make-array size)))
+
+(defclass function-object (basic-object)
+  ((function :accessor function-object-fn
+             :initarg :function)))
+
+(defclass expr-object (function-object)
+  ())
+
+(defun mk-expr (fn)
+  (make-instance 'expr-object :function fn))
+
+(defclass fixed-object (function-object)
+  ())
+
+(defun mk-fixed (fn)
+  (make-instance 'fixed-object :function fn))
+
 (defmethod eq-object ((lhs basic-object) (rhs (eql nil)))
   nil)
 
@@ -356,6 +434,76 @@
                  (transformer-name (eql 'type))
                  (args list))
   (cons nil (append (list (mk-symbol (object-value object))) args)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;  maru evalutator transformer
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; > hardcoded semantics for evaluation composition
+
+;; FIXME: implement
+(defun applicator-from-internal (type)
+  (declare (ignore type))
+  nil)
+
+;;;;;;;;;; basic object ;;;;;;;;;;
+; > use *applicators*
+
+(defmethod inform ((object basic-object)
+                   (transformer-name (eql 'eval))
+                   (whatami (eql 'arg)))
+  (error (format nil "implement eval inform for ~A arg!~%"
+                 (type-of object))))
+
+(defmethod inform :around ((object basic-object)
+                           (transformer-name (eql 'eval))
+                           (whatami (eql 'arg)))
+  (cond ((applicator-from-internal (type-of object))
+         (error "args shouldn't get messages when there is an applicator"))
+        (t (assert (next-method-p)) (call-next-method))))
+
+(defmethod inform ((object basic-object)
+                   (transformer-name (eql 'eval))
+                   (whatami (eql 'lead)))
+  (error (format nil "implement eval inform for ~A lead~%"
+                 (type-of object))))
+
+(defmethod inform :around ((object basic-object)
+                           (transformer-name (eql 'eval))
+                           (whatami (eql 'lead)))
+  (cond ((applicator-from-internal (type-of object)) nil)
+         (t (assert (next-method-p)) (call-next-method))))
+
+(defmethod pass ((object basic-object)
+                 (trasformer-name (eql 'eval))
+                 (args list))
+  (error (format nil "implement eval pass for ~A~%"
+                 (type-of object))))
+
+;; FIXME: implement
+(defmethod pass :around ((object basic-object)
+                         (transformer-name (eql 'eval))
+                         (args list))
+  (let ((applicator (applicator-from-internal (type-of object))))
+    (cond (applicator (error "call the applicator and pass args!"))
+          (t (assert (next-method-p)) (call-next-method)))))
+
+;;;;;;;;;; function object ;;;;;;;;;;
+
+(defmethod inform ((object expr-object)
+                   (transformer-name (eql 'eval))
+                   (whatami (eql 'arg)))
+  object)
+
+(defmethod inform ((object expr-object)
+                   (transformer-name (eql 'eval))
+                   (whatami (eql 'lead)))
+  t)
+
+(defmethod pass ((object expr-object)
+                 (transformer-name (eql 'eval))
+                 (args list))
+  (let ((fn (function-object-fn object)))
+    `(nil . ,(funcall fn *ctx* args))))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -589,16 +737,49 @@
          (eq nil (maru-lookup (maru-parent-ctx ctx) doesntexist)))))
 
 (deftest test-initialize-simple-maru
-  (let ((env (initialize-maru)))
-    (and (lookup env 'if)
-         (lookup env 'cons)
-         (lookup env 'car)
-         (lookup env 'cdr))))
+  (let ((ctx (maru-initialize)))
+    (and (maru-lookup ctx (mk-symbol "if"))
+         (maru-lookup ctx (mk-symbol "cons"))
+         (maru-lookup ctx (mk-symbol "car"))
+         (maru-lookup ctx (mk-symbol "cdr"))
+         (not (maru-lookup ctx (mk-symbol "t")))
+         (member (mk-symbol "t") (maru-context-symbols ctx)
+                 :test #'eq-object))))
+
+(deftest test-maru-primitive-cons
+  (let* ((ctx (maru-initialize))
+         (a (mk-string "this"))
+         (b (mk-number "200"))
+         (out nil))
+    (setf out
+          (funcall (function-object-fn
+                     (maru-lookup ctx (maru-intern ctx "cons")))
+                   ctx a b))
+    (and (eq-object a (car out))
+         (eq-object b (cdr out)))))
+
+(deftest test-maru-primitive-if-simple
+  (let ((ctx (maru-initialize)))
+    (eq-object (mk-number "12")
+               (funcall (function-object-fn
+                          (maru-lookup ctx (maru-intern ctx "if")))
+                        ctx
+                        (maru-intern ctx "t")
+                        (mk-number "12")
+                        (mk-number "14")))))
 
 (deftest test-maru-primitive-if
-  (let ((env (initialize-maru)))
-    (and (equal 2 (funcall (lookup env 'if) '(1 2 3) env))
-         (equal 4 (funcall (lookup env 'if) '(() 12 4) env))
-         (equal "str" (funcall (lookup env 'if) '(t "str") env))
-         (equal '() (funcall (lookup env 'if) '(() "other") env)))))
+  (let ((ctx (maru-initialize)))
+    (and (equal 2 (funcall (lookup ctx 'if) '(1 2 3) ctx))
+         (equal 4 (funcall (lookup ctx 'if) '(() 12 4) ctx))
+         (equal "str" (funcall (lookup ctx 'if) '(t "str") ctx))
+         (equal '() (funcall (lookup ctx 'if) '(() "other") ctx)))))
+
+(deftest test-typer-intern
+  "typer should intern symbols it creates!"
+  nil)
+
+(deftest test-applicator-from-internal
+  "should be able to take an applicator and get it's internal function"
+  nil)
 
