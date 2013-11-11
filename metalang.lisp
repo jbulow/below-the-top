@@ -116,17 +116,45 @@
   name)
 
 (defclass basic-object ()
-  ((value :accessor basic-object-value
-          :initarg :value)))
+  ())
 
-(defclass untyped-object (basic-object)
+(defclass single-value-object (basic-object)
+  ((value :accessor object-value
+          :initarg  :value)))
+
+(defclass untyped-object (single-value-object)
   ())
 
 (defun mk-untyped (value)
   (make-instance 'untyped-object :value value))
 
-(defmethod eq-object ((lhs untyped-object) (rhs untyped-object))
-  (equal (basic-object-value lhs) (basic-object-value rhs)))
+(defclass symbol-object (single-value-object)
+  ())
+
+(defun mk-symbol (value)
+  (make-instance 'symbol-object :value value))
+
+(defclass list-object (basic-object)
+  ((elements :accessor list-object-elements
+             :initarg  :elements)))
+
+(defun mk-list (&rest elements)
+  (make-instance 'list-object :elements elements))
+
+(defun mk-number (&rest args)
+  (declare (ignore args))
+  (error "implement mk-number"))
+
+(defun mk-string (&rest args)
+  (declare (ignore args))
+  (error "implement mk-string"))
+
+(defmethod eq-object ((lhs single-value-object) (rhs single-value-object))
+  (equal (object-value lhs) (object-value rhs)))
+
+(defmethod eq-object ((lhs list-object) (rhs list-object))
+  (eq-tree (list-object-elements lhs) (list-object-elements rhs)
+           :test #'eq-object))
 
 ;;; sexpr : should be a (possibly nested) list of string literals
 (defun untype-everything (sexpr)
@@ -140,14 +168,14 @@
 (defmethod inform ((object basic-object)
                    (transformer-name symbol)
                    (whatami symbol))
-  (error "object with value {~A} doesn't implement 'inform' on ~A"
-         (basic-object-value object) transformer-name))
+  (error "object of type ~A doesn't implement 'inform' on ~A"
+         (type-of object) transformer-name))
 
 (defmethod pass ((object basic-object)
                  (transformer-name symbol)
                  (args list))
-  (error "object with value {~A} doesn't implement 'pass' on ~A"
-         (basic-object-value object) transformer-name))
+  (error "object of type ~A doesn't implement 'pass' on ~A"
+         (type-of object) transformer-name))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -171,6 +199,29 @@
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;    type transformer
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defmethod inform ((object untyped-object)
+                   (transformer-name (eql 'type))
+                   (whatami (eql 'arg)))
+  (let* ((val (object-value object))
+         (first-char (char val 0)))
+    (cond ((char= #\" first-char)                   ; string
+           (cons nil (mk-string (subseq val 1 (length val)))))
+          ((alpha-char-p first-char) (cons nil (mk-symbol val))))))
+
+(defmethod inform ((object untyped-object)
+                   (transformer-name (eql 'type))
+                   (whatami (eql 'lead)))
+  t)
+
+(defmethod pass ((object untyped-object)
+                 (transformer-name (eql 'type))
+                 (args list))
+  (cons nil (append (list (mk-symbol (object-value object))) args)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;     infrastructure
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -180,7 +231,7 @@
   ;; response : (transform-more? . sexpr)
   (let ((response (inform expr (transformer-name transformer) 'arg)))
     (if (car response)
-        (transform transformer (cdr response))
+        (transform transformer (cdr response) *env*)
         (cdr response))))
 
 (defun back-talk-sexpr (transformer lead &key expr-args)
@@ -190,21 +241,26 @@
   (let* ((response (inform lead (transformer-name transformer) 'lead))
          (args (mapcar #'(lambda (a)
                            (if response
-                               (transform transformer a)
+                               (transform transformer a *env*)
                                (identity a)))
                        expr-args)))
       ;; response : (transform-more? . sexpr)
-      (let ((response-2 (pass lead (transformer-name transformer) args)))
+      (let ((response-2
+              (pass lead (transformer-name transformer) args)))
         (if (car response-2)
-            (transform transformer (cdr response-2))
+            (transform transformer (cdr response-2) *env*)
             (cdr response-2)))))
 
 ;;; transform a single expression {sexpression, atom}
-(defun transform (transformer expr)
-  (cond ((atom expr) (back-talk-arg transformer expr))
-        ((null expr) '())
-        (t
-          (back-talk-sexpr transformer (car expr) :expr-args (cdr expr)))))
+(defun transform (transformer expr env)
+  (let ((*env* env))
+    (declare (special *env*))
+    (cond ((atom expr) (back-talk-arg transformer expr))
+          ((null expr) '())
+          (t
+            (back-talk-sexpr transformer
+                             (car expr)
+                             :expr-args (cdr expr))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -322,7 +378,7 @@
         (untyped-expr (untype-everything
                         (tokenize
                           (next-char-factory "(1 2 3 4 5)")))))
-    (eq-tree (transform noop-transformer untyped-expr) untyped-expr
+    (eq-tree (transform noop-transformer untyped-expr nil) untyped-expr
              :test #'eq-object)))
 
 (deftest test-unquote-handler
@@ -347,4 +403,29 @@
          (equal (funcall next-char-fn 'peek) #\o)
          (equal (funcall next-char-fn 'peek) #\o)
          (equal (funcall next-char-fn) #\o))))
+
+(deftest test-type-transformer
+  (let ((type-transformer (make-transformer :name 'type))
+        (untyped-expr (untype-everything
+                        (tokenize
+                          (next-char-factory
+                            "(some-fn a-sym (more here) sym9001)"))))
+        (typed-expr (list (mk-symbol "some-fn")
+                          (mk-symbol "a-sym")
+                          (list (mk-symbol "more") (mk-symbol "here"))
+                          (mk-symbol "sym9001"))))
+    (eq-tree (transform type-transformer untyped-expr nil) typed-expr
+             :test #'eq-object)))
+
+;;; FIXME: write tests for chars, strings and nonhex numbers.
+(deftest test-type-transformer-hex
+  (let ((type-transformer (make-transformer :name 'type))
+        (untyped-expr (untype-everything
+                        (tokenize
+                          (next-char-factory
+                            "(trees 0x123 (green) 0X456)"))))
+        (typed-expr (list (mk-symbol "trees") (mk-number #x123)
+                          (list (mk-symbol "green") (mk-number #x456)))))
+    (eq-tree (transform type-transformer untyped-expr nil) typed-expr
+             :test #'eq-object)))
 
