@@ -141,9 +141,14 @@
 (defun mk-list (&rest elements)
   (make-instance 'list-object :elements elements))
 
-(defun mk-number (&rest args)
-  (declare (ignore args))
-  (error "implement mk-number"))
+(defclass number-object (single-value-object)
+  ())
+
+(defun mk-number (value &key hex)
+  (make-instance 'number-object
+                 :value (read-from-string (if hex
+                                              (scat "#x" value)
+                                              value))))
 
 (defun mk-string (&rest args)
   (declare (ignore args))
@@ -206,10 +211,19 @@
                    (transformer-name (eql 'type))
                    (whatami (eql 'arg)))
   (let* ((val (object-value object))
+         (len (length val))
          (first-char (char val 0)))
     (cond ((char= #\" first-char)                   ; string
-           (cons nil (mk-string (subseq val 1 (length val)))))
-          ((alpha-char-p first-char) (cons nil (mk-symbol val))))))
+           (cons nil (mk-string (subseq val 1 len))))
+          ((alpha-char-p first-char) (cons nil (mk-symbol val)))
+          ((digit-char-p first-char)
+           (cons nil
+                 (if (and (>= len 2) (char-equal #\x (char val 1)))
+                     (progn
+                       (assert (> len 2))
+                       (mk-number (subseq val 2 len) :hex t))
+                     (mk-number val))))
+          (t (error "unsure how to do type conversion?")))))
 
 (defmethod inform ((object untyped-object)
                    (transformer-name (eql 'type))
@@ -423,9 +437,10 @@
         (untyped-expr (untype-everything
                         (tokenize
                           (next-char-factory
-                            "(trees 0x123 (green) 0X456)"))))
-        (typed-expr (list (mk-symbol "trees") (mk-number #x123)
-                          (list (mk-symbol "green") (mk-number #x456)))))
+                            "(trees 0x123 (green 2) 0X456)"))))
+        (typed-expr (list (mk-symbol "trees") (mk-number "123" :hex t)
+                          (list (mk-symbol "green") (mk-number "2"))
+                          (mk-number "456" :hex t))))
     (eq-tree (transform type-transformer untyped-expr nil) typed-expr
              :test #'eq-object)))
 
