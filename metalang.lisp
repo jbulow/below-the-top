@@ -494,7 +494,10 @@
 (defmethod inform ((object symbol-object)
                    (transformer-name (eql 'eval))
                    (whatami (eql 'arg)))
-  (error "implement symbol lookup for arguments!"))
+  (let ((binding (maru-lookup *ctx* object)))
+    (if binding
+        `(nil . ,binding)
+        (error (format nil "arg ~A is undefined" (object-value object))))))
 
 (defmethod inform ((object symbol-object)
                    (transformer-name (eql 'eval))
@@ -820,6 +823,23 @@
     (setf out (transform eval-transformer typed-expr ctx))
     (and (eq-object (car out) (mk-string "kewl"))
          (eq-object (cdr out) (mk-number "22")))))
+
+(deftest test-maru-eval-transform-simple-bindings
+  (let* ((ctx (maru-initialize))
+         (eval-transformer (make-transformer :name 'eval))
+         (untyped-expr (untype-everything
+                         (tokenize
+                           (next-char-factory
+                             "(cons kewl (cons yessuh 22))"))))
+         (type-transformer (make-transformer :name 'type))
+         (typed-expr (transform type-transformer untyped-expr ctx))
+         (out nil))
+    (maru-define ctx (mk-symbol "yessuh") (mk-number "100"))
+    (maru-define ctx (mk-symbol "kewl") (mk-string "astronauts"))
+    (setf out (transform eval-transformer typed-expr ctx))
+    (and (eq-object (car out)  (mk-string "astronauts"))
+         (eq-object (cadr out) (mk-number "100"))
+         (eq-object (cddr out)  (mk-number "22")))))
 
 (deftest test-maru-primitive-if-simple
   nil)
