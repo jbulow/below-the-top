@@ -118,6 +118,136 @@
 (defstruct transformer
   name)
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; default fail transformer
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defmethod inform ((object basic-object)
+                   (transformer-name symbol)
+                   (whatami symbol))
+  (error "object of type ~A doesn't implement 'inform' on ~A"
+         (type-of object) transformer-name))
+
+(defmethod pass ((object basic-object)
+                 (transformer-name symbol)
+                 (args list))
+  (error "object of type ~A doesn't implement 'pass' on ~A"
+         (type-of object) transformer-name))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;    noop transformer
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defmethod inform ((object basic-object)
+                   (transformer-name (eql 'noop))
+                   (whatami (eql 'arg)))
+  (cons nil object))
+
+(defmethod inform ((object basic-object)
+                   (transformer-name (eql 'noop))
+                   (whatami (eql 'lead)))
+  t)
+
+(defmethod pass ((object basic-object)
+                 (transformer-name (eql 'noop))
+                 (args list))
+  (cons nil (append (list object) args)))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;     infrastructure
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defun back-talk-arg (transformer expr)
+  (declare (optimize debug))
+  (assert (typep expr 'atom))
+  ;; response : (transform-more? . sexpr)
+  (let ((response (inform expr (transformer-name transformer) 'arg)))
+    (if (car response)
+        (transform transformer (cdr response) *env*)
+        (cdr response))))
+
+(defun back-talk-sexpr (transformer lead &key expr-args)
+  (declare (optimize debug))
+  (assert (typep expr-args 'list))
+  ;; response : can-i-talk-to-your-arguments?
+  (let* ((response (inform lead (transformer-name transformer) 'lead))
+         (args (mapcar #'(lambda (a)
+                           (if response
+                               (transform transformer a *env*)
+                               (identity a)))
+                       expr-args)))
+      ;; response : (transform-more? . sexpr)
+      (let ((response-2
+              (pass lead (transformer-name transformer) args)))
+        (if (car response-2)
+            (transform transformer (cdr response-2) *env*)
+            (cdr response-2)))))
+
+;;; transform a single expression {sexpression, atom}
+(defun transform (transformer expr env)
+  (let ((*env* env))
+    (declare (special *env*))
+    (cond ((atom expr) (back-talk-arg transformer expr))
+          ((null expr) '())
+          (t
+            (back-talk-sexpr transformer
+                             (car expr)
+                             :expr-args (cdr expr))))))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;            maru
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defclass maru-env ()
+  ((bindings :accessor maru-env-bindings
+             :initarg  :bindings)
+   (parent :accessor maru-env-parent
+           :initarg   :parent
+           :type maru-env)))
+
+(defstruct maru-context
+  env
+  symbols)
+
+(defun maru-mk-empty-ctx ()
+  (let ((env (make-instance 'maru-env
+                :bindings nil
+                :parent nil)))
+    (make-maru-context :env env :symbols nil)))
+
+(defun maru-intern (ctx text)
+  (let ((symbol (mk-symbol text)))
+    (car (push symbol (maru-context-symbols ctx)))))
+
+(defun maru-define (ctx symbol obj)
+  (assert (typep symbol 'symbol-object))
+  ; (when (maru-lookup ctx symbol)
+    ; (warn-me "redefining symbol"))
+  (car (push (cons symbol obj)
+             (maru-env-bindings (maru-context-env ctx)))))
+
+(defun maru-lookup (ctx symbol)
+  (unless (assoc symbol (maru-context-symbols ctx))
+    (error "this symbol has not been interned!"))
+  (labels ((l-up (env)
+             (cond ((null env) nil)
+                   ((assoc symbol env) (cdr (assoc symbol env)))
+                   (t (l-up (maru-env-parent env))))))
+    (l-up (maru-context-env ctx))))
+
+;;; intern primitives and add their bindings to global env
+(defun initialize-maru ()
+  nil)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;  maru type transformer
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
 (defclass basic-object ()
   ())
 
@@ -176,48 +306,6 @@
 (defun untype-everything (sexpr)
   (tree-map #'(lambda (string) (mk-untyped string)) sexpr))
 
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; default fail transformer
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-(defmethod inform ((object basic-object)
-                   (transformer-name symbol)
-                   (whatami symbol))
-  (error "object of type ~A doesn't implement 'inform' on ~A"
-         (type-of object) transformer-name))
-
-(defmethod pass ((object basic-object)
-                 (transformer-name symbol)
-                 (args list))
-  (error "object of type ~A doesn't implement 'pass' on ~A"
-         (type-of object) transformer-name))
-
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;;    noop transformer
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;; 
-
-(defmethod inform ((object basic-object)
-                   (transformer-name (eql 'noop))
-                   (whatami (eql 'arg)))
-  (cons nil object))
-
-(defmethod inform ((object basic-object)
-                   (transformer-name (eql 'noop))
-                   (whatami (eql 'lead)))
-  t)
-
-(defmethod pass ((object basic-object)
-                 (transformer-name (eql 'noop))
-                 (args list))
-  (cons nil (append (list object) args)))
-
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;;    type transformer
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
 (defmethod inform ((object untyped-object)
                    (transformer-name (eql 'type))
                    (whatami (eql 'arg)))
@@ -248,46 +336,6 @@
                  (args list))
   (cons nil (append (list (mk-symbol (object-value object))) args)))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;;     infrastructure
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-(defun back-talk-arg (transformer expr)
-  (declare (optimize debug))
-  (assert (typep expr 'atom))
-  ;; response : (transform-more? . sexpr)
-  (let ((response (inform expr (transformer-name transformer) 'arg)))
-    (if (car response)
-        (transform transformer (cdr response) *env*)
-        (cdr response))))
-
-(defun back-talk-sexpr (transformer lead &key expr-args)
-  (declare (optimize debug))
-  (assert (typep expr-args 'list))
-  ;; response : can-i-talk-to-your-arguments?
-  (let* ((response (inform lead (transformer-name transformer) 'lead))
-         (args (mapcar #'(lambda (a)
-                           (if response
-                               (transform transformer a *env*)
-                               (identity a)))
-                       expr-args)))
-      ;; response : (transform-more? . sexpr)
-      (let ((response-2
-              (pass lead (transformer-name transformer) args)))
-        (if (car response-2)
-            (transform transformer (cdr response-2) *env*)
-            (cdr response-2)))))
-
-;;; transform a single expression {sexpression, atom}
-(defun transform (transformer expr env)
-  (let ((*env* env))
-    (declare (special *env*))
-    (cond ((atom expr) (back-talk-arg transformer expr))
-          ((null expr) '())
-          (t
-            (back-talk-sexpr transformer
-                             (car expr)
-                             :expr-args (cdr expr))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -468,4 +516,40 @@
                 (mk-char #\!))))
     (eq-tree (transform type-transformer untyped-expr nil) typed-expr
              :test #'eq-object)))
+
+(deftest test-maru-intern
+  (let* ((ctx (maru-mk-empty-ctx))
+         (out-sym (mk-symbol "hello-world"))
+         (test-sym nil))
+    (setf test-sym (maru-intern ctx "hello-world"))
+    (and (eq-object test-sym out-sym)
+         (member out-sym (maru-context-symbols ctx) :test 'eq-object)
+         (= 1 (length (maru-context-symbols ctx)))
+         (= 0 (length (maru-env-bindings (maru-context-env ctx)))))))
+
+(deftest test-maru-define
+  (let* ((ctx (maru-mk-empty-ctx))
+         (obj (mk-number "4001"))
+         (sym-string "neverneverneverland")
+         (test-out (cons (mk-symbol sym-string) obj))
+         (out nil))
+    (setf out (maru-define ctx (maru-intern ctx sym-string) obj))
+    (and (eq-object (car out) (car test-out))
+         (eq-object (cdr out) (cdr test-out))
+         (= 1 (length (maru-context-symbols ctx)))
+         (= 1 (length (maru-env-bindings (maru-context-env ctx)))))))
+
+(deftest test-initialize-simple-maru
+  (let ((env (initialize-maru)))
+    (and (lookup env 'if)
+         (lookup env 'cons)
+         (lookup env 'car)
+         (lookup env 'cdr))))
+
+(deftest test-maru-primitive-if
+  (let ((env (initialize-maru)))
+    (and (equal 2 (funcall (lookup env 'if) '(1 2 3) env))
+         (equal 4 (funcall (lookup env 'if) '(() 12 4) env))
+         (equal "str" (funcall (lookup env 'if) '(t "str") env))
+         (equal '() (funcall (lookup env 'if) '(() "other") env)))))
 
