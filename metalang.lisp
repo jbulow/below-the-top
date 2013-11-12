@@ -1187,6 +1187,11 @@
          (eq-object (mk-number "40")
                     (maru-all-transforms ctx "(fn 2 (fn 3 4))")))))
 
+
+(deftest test-lambda-implicit-block
+  "lambdas should have implicit blocks; state mutator before testable"
+  nil)
+
 (deftest test-applicator-from-internal
   "should be able to take an applicator and get it's internal function"
   nil)
