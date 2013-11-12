@@ -361,8 +361,8 @@
 ; form
 (defun maru-primitive-define (ctx &rest args)
   (let ((eval-transformer (make-transformer :name 'eval)))
-    (maru-define ctx (car args) (transform eval-transformer
-                                           (cadr args) ctx))))
+    (cdr (maru-define ctx (car args) (transform eval-transformer
+                                                (cadr args) ctx)))))
 ; fixed
 (defun maru-primitive-lambda (ctx &rest args)
   (mk-closure ctx args))
@@ -452,14 +452,14 @@
 (defun mk-array (size)
   (make-instance 'array-object :elements (make-array size)))
 
-(defclass runtime-closure-object ()
+(defclass runtime-closure-object (basic-object)
   ((src :accessor runtime-closure-object-src
         :initarg  :src)
    (ctx :accessor runtime-closure-object-ctx
         :initarg  :ctx)))
 
 (defun mk-closure (ctx src)
-  (make-instance 'closure-object :ctx ctx :src src))
+  (make-instance 'runtime-closure-object :ctx ctx :src src))
 
 (defclass function-object (basic-object)
   ((function :accessor function-object-fn
@@ -610,7 +610,11 @@
 (defmethod inform ((object symbol-object)
                    (transformer-name (eql 'eval))
                    (whatami (eql 'lead)))
-  t)
+  (declare (special *ctx*))
+  (let ((binding (maru-lookup *ctx* object)))
+    (if binding
+        (inform binding 'eval 'lead)        ; forward
+        (error (format nil "'~A' is undefined" (object-value object))))))
 
 ;;; OF-NOTE: forwarding
 (defmethod pass ((object symbol-object)
@@ -628,7 +632,7 @@
 (defmethod inform ((object expr-object)
                    (transformer-name (eql 'eval))
                    (whatami (eql 'arg)))
-  object)
+  `(nil . ,object))
 
 (defmethod inform ((object expr-object)
                    (transformer-name (eql 'eval))
@@ -648,12 +652,12 @@
 (defmethod inform ((object fixed-object)
                    (transformer-name (eql 'eval))
                    (whatami (eql 'arg)))
-  object)
+  `(nil . ,object))
 
 (defmethod inform ((object fixed-object)
                    (transformer-name (eql 'eval))
                    (whatami (eql 'lead)))
-  t)
+  nil)
 
 (defmethod pass ((object fixed-object)
                  (transformer-name (eql 'eval))
@@ -667,7 +671,7 @@
 (defmethod inform ((object runtime-closure-object)
                    (transformer-name (eql 'eval))
                    (whatami (eql 'arg)))
-  object)
+  `(nil . ,object))
 
 (defmethod inform ((object runtime-closure-object)
                    (transformer-name (eql 'eval))
@@ -687,8 +691,12 @@
                             args))
       (maru-define child-ctx (car arg-param) (cadr arg-param)))
     ;; apply the function in the lexical env
-    (transform eval-transformer
-               child-ctx (cdr (runtime-closure-object-src object)))))
+    ;; FIXME: the (cadr (runtime-closure-object-src object)) is the
+    ;;        first expression after the arglist; may want to make this
+    ;;        an implicit block.
+    `(nil . ,(transform eval-transformer
+                        (cadr (runtime-closure-object-src object))
+                        child-ctx))))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -954,7 +962,8 @@
     (setf test-sym (maru-intern ctx "hello-world"))
     (and (eq-object test-sym out-sym)
          (member out-sym (maru-context-symbols ctx) :test 'eq-object)
-         (= 1 (length (maru-context-symbols ctx)))
+         ;; dummy symbol
+         (= 2 (length (maru-context-symbols ctx)))
          (= 0 (length (maru-env-bindings (maru-context-env ctx)))))))
 
 (deftest test-intern-symbols-when-typing
@@ -968,7 +977,8 @@
     (setf out (transform type-transformer untyped-expr ctx))
     (and (= 0 (length (maru-env-bindings (maru-context-env ctx))))
          (null (maru-env-parent (maru-context-env ctx)))
-         (= 4 (length (maru-context-symbols ctx)))
+         ;; dummy symbol
+         (= 5 (length (maru-context-symbols ctx)))
          (member (mk-symbol "type") (maru-context-symbols ctx)
                  :test #'eq-object)
          (member (mk-symbol "these") (maru-context-symbols ctx)
@@ -991,7 +1001,8 @@
     (setf out (maru-define ctx (maru-intern ctx sym-string) obj))
     (and (eq-object (car out) (car test-out))
          (eq-object (cdr out) (cdr test-out))
-         (= 1 (length (maru-context-symbols ctx)))
+         ;; dummy symbol
+         (= 2 (length (maru-context-symbols ctx)))
          (= 1 (length (maru-env-bindings (maru-context-env ctx)))))))
 
 (deftest test-maru-lookup
