@@ -13,6 +13,8 @@
 ;;;    behavior in our infrastructure? Does it even make sense in our
 ;;;    model?
 
+(proclaim '(optimize (debug 3)))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;          Tokenizor
@@ -33,7 +35,6 @@
           (t (error "remove-trailing-paren has unexpected character!")))))
 
 (defun tokenize-parenlist (next-char-fn read-table)
-  (declare (optimize debug))
   (let ((c (funcall next-char-fn))
         (exprs '()))
     (assert (char= c #\())
@@ -47,7 +48,6 @@
 
 ;; caller must _know_ that the first character is 'valid'
 (defun tokenize-characters (next-char-fn &optional (so-far ""))
-  (declare (optimize debug))
   (let ((c (funcall next-char-fn)))
     (assert (not (string= c 'negative-space)))
     (cond ((null c) so-far)
@@ -60,7 +60,6 @@
 ;;;; Tokenizes a single sexpr
 ;;;; > FIXME: we could treat #\( as a macro character
 (defun tokenize (next-char-fn &optional read-table)
-  (declare (optimize debug))
   (let ((c (funcall next-char-fn)))
     (cond ((null c) '())
           ((char= c #\()
@@ -73,7 +72,6 @@
              (tokenize-characters next-char-fn)))))
 
 (defun next-char-factory (expr)
-  (declare (optimize debug))
   (let ((count 0))
     (lambda (&optional opt)
       (block factory
@@ -160,7 +158,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defun back-talk-arg (transformer expr)
-  (declare (optimize debug))
+  (declare (special *ctx*))
   (assert (typep expr 'atom))
   ;; response : (transform-more? . sexpr)
   (let ((response (inform expr (transformer-name transformer) 'arg)))
@@ -169,7 +167,7 @@
         (cdr response))))
 
 (defun back-talk-sexpr (transformer lead &key expr-args)
-  (declare (optimize debug))
+  (declare (special *ctx*))
   (assert (typep expr-args 'list))
   ;; response : can-i-talk-to-your-arguments?
   (let* ((response (inform lead (transformer-name transformer) 'lead))
@@ -289,10 +287,13 @@
 (defun maru-primitive-if (ctx &rest args)
   (let ((test (car args))
         (then (cadr args))
-        (else (cddr args)))
-    (if (maru-eval ctx test)
-        (maru-eval ctx then)
-        (maru-eval ctx else))))
+        (else (cddr args))
+        (eval-transformer (make-transformer :name 'eval)))
+    (if (not (maru-nil? (transform eval-transformer test ctx)))
+        (transform eval-transformer then ctx)
+        (let ((out nil))
+          (dolist (e else out)                    ; implicit block
+            (setf out (transform eval-transformer e ctx)))))))
 
 ; expr
 (defun maru-primitive-cons (ctx &rest args)
@@ -338,6 +339,9 @@
   ((elements :accessor list-object-elements
              :initarg  :elements)))
 
+;;; unclear whether we should use 'mk-pair' instead
+;;; > using a list object is nice because we easily represent nil with
+;;;   the empty list
 (defun mk-list (&rest elements)
   (make-instance 'list-object :elements elements))
 
@@ -401,6 +405,12 @@
   (eq-tree (list-object-elements lhs) (list-object-elements rhs)
            :test #'eq-object))
 
+(defmethod maru-nil? ((object list-object))
+  (eq-object object (mk-list)))
+
+(defmethod maru-nil? ((object basic-object))
+  nil)
+
 ;;; sexpr : should be a (possibly nested) list of string literals
 (defun untype-everything (sexpr)
   (tree-map #'(lambda (string) (mk-untyped string)) sexpr))
@@ -408,6 +418,7 @@
 (defmethod inform ((object untyped-object)
                    (transformer-name (eql 'type))
                    (whatami (eql 'arg)))
+  (declare (special *ctx*))
   (let* ((val (object-value object))
          (len (length val))
          (first-char (char val 0)))
@@ -433,6 +444,7 @@
 (defmethod pass ((object untyped-object)
                  (transformer-name (eql 'type))
                  (args list))
+  (declare (special *ctx*))
   (cons nil (append (list (maru-intern *ctx* (object-value object)))
                     args)))
 
@@ -494,6 +506,7 @@
 (defmethod inform ((object symbol-object)
                    (transformer-name (eql 'eval))
                    (whatami (eql 'arg)))
+  (declare (special *ctx*))
   (let ((binding (maru-lookup *ctx* object)))
     (if binding
         `(nil . ,binding)
@@ -507,6 +520,7 @@
 (defmethod pass ((object symbol-object)
                  (transformer-name (eql 'eval))
                  (args list))
+  (declare (special *ctx*))
   (let ((binding (maru-lookup *ctx* object)))
     (if binding
         (pass binding 'eval args)
@@ -527,6 +541,7 @@
 (defmethod pass ((object expr-object)
                  (transformer-name (eql 'eval))
                  (args list))
+  (declare (special *ctx*))
   (let ((fn (function-object-fn object)))
     `(nil . ,(apply fn *ctx* args))))
 
@@ -842,17 +857,23 @@
          (eq-object (cddr out)  (mk-number "22")))))
 
 (deftest test-maru-primitive-if-simple
-  nil)
-#|
   (let ((ctx (maru-initialize)))
-    (eq-object (mk-number "12")
-               (funcall (function-object-fn
-                          (maru-lookup ctx (maru-intern ctx "if")))
-                        ctx
-                        (maru-intern ctx "t")
-                        (mk-number "12")
-                        (mk-number "14")))))
-|#
+         ;; test 'then' branch
+    (and (eq-object (mk-string "goodbye")
+                    (funcall (function-object-fn
+                               (maru-lookup ctx (mk-symbol "if")))
+                             ctx
+                             (mk-string "not-nil")      ;; predicate
+                             (mk-string "goodbye")      ;; then
+                             (mk-number "100")))        ;; else
+         ;; test 'else' branch
+         (eq-object (mk-number "14")
+                    (funcall (function-object-fn
+                                (maru-lookup ctx (maru-intern ctx "if")))
+                             ctx
+                             (mk-list)                  ;; predicate
+                             (mk-number "12")           ;; then
+                             (mk-number "14"))))))      ;; else
 
 (deftest test-maru-primitive-if
   nil)
