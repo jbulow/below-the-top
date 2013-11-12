@@ -284,6 +284,14 @@
                      (mk-form #'maru-primitive-and))
     (maru-define ctx (maru-intern ctx "define")
                      (mk-form #'maru-primitive-define))
+    (maru-define ctx (maru-intern ctx "+")
+                     (mk-expr #'maru-primitive-add))
+    (maru-define ctx (maru-intern ctx "-")
+                     (mk-expr #'maru-primitive-sub))
+    (maru-define ctx (maru-intern ctx "*")
+                     (mk-expr #'maru-primitive-mul))
+    (maru-define ctx (maru-intern ctx "/")
+                     (mk-expr #'maru-primitive-div))
 
     ;; compositioners
     (maru-define ctx (maru-intern ctx "*expanders*") (mk-array 32))
@@ -295,6 +303,12 @@
 (defun maru-eval (ctx expr)
   (declare (ignore ctx expr))
   nil)
+
+(defun binding-exists? (ctx sym)
+  (let ((symbol (mk-symbol sym)))
+    (and (maru-lookup ctx symbol)
+         (member symbol (maru-context-symbols ctx) :test #'eq-object))))
+
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;      maru primitives
@@ -343,6 +357,29 @@
     (maru-define ctx (car args) (transform eval-transformer
                                            (cadr args) ctx))))
 
+; expr
+(defun maru-primitive-add (ctx &rest args)
+  (declare (ignore ctx))
+  (mk-number (to-string (+ (object-value (car args))
+                           (object-value (cadr args))))))
+
+; expr
+(defun maru-primitive-sub (ctx &rest args)
+  (declare (ignore ctx))
+  (mk-number (to-string (- (object-value (car args))
+                           (object-value (cadr args))))))
+
+; expr
+(defun maru-primitive-mul (ctx &rest args)
+  (declare (ignore ctx))
+  (mk-number (to-string (* (object-value (car args))
+                           (object-value (cadr args))))))
+
+; expr
+(defun maru-primitive-div (ctx &rest args)
+  (declare (ignore ctx))
+  (mk-number (to-string (floor (object-value (car args))
+                               (object-value (cadr args))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;  maru type transformer
@@ -1016,6 +1053,14 @@
 (defun type-expr (ctx src)
   (transform (make-transformer :name 'type) (untype-expr src) ctx))
 
+(defun maru-all-transforms (ctx src)
+  (let ((expand-transformer (make-transformer :name 'expand))
+        (eval-transformer (make-transformer :name 'eval))
+        (typed-expr (type-expr ctx src)))
+    (transform eval-transformer
+               (transform expand-transformer typed-expr ctx)
+               ctx)))
+
 (deftest test-maru-eval-with-fixed
   (let* ((ctx (maru-initialize))
          (eval-transformer (make-transformer :name 'eval))
@@ -1046,12 +1091,9 @@
 
 (deftest test-maru-simple-expand-and-eval
   (let* ((ctx (maru-initialize))
-         (expand-transformer (make-transformer :name 'expand))
-         (eval-transformer (make-transformer :name 'eval))
-         (typed-expr
-           (type-expr ctx "(cons (and 1 3 \"hello\") \"world\")"))
-         (expanded-expr (transform expand-transformer typed-expr ctx))
-         (evaled-expr (transform eval-transformer expanded-expr ctx)))
+         (evaled-expr
+           (maru-all-transforms ctx
+                                "(cons (and 1 3 \"hello\") \"world\")")))
     (and (eq-object (car evaled-expr) (mk-string "hello"))
          (eq-object (cdr evaled-expr) (mk-string "world")))))
 
@@ -1061,13 +1103,35 @@
          (typed-expr (type-expr ctx "(define a \"some-value\")"))
          (def-sym (mk-symbol "define"))
          (a-sym (mk-symbol "a"))
-         (evaled-expr (transform expand-transformer typed-expr ctx)))
-    (declare (ignore evaled-expr))
+         (expanded-expr (transform expand-transformer typed-expr ctx)))
+    (declare (ignore expanded-expr))
          ; did we add 'define' successfully?
     (and (member def-sym (maru-context-symbols ctx) :test #'eq-object)
          ; did we add 'a' successfully with define?
          (member a-sym (maru-context-symbols ctx) :test #'eq-object)
          (eq-object (mk-string "some-value") (maru-lookup ctx a-sym)))))
+
+(deftest test-maru-primitive-arithmetic
+  (let* ((ctx (maru-initialize))
+         (src "(- (/ (* 5 (+ 8 4)) 2) 9)")
+         (result (maru-all-transforms ctx src)))
+    (and (binding-exists? ctx "-") (binding-exists? ctx "+")
+         (binding-exists? ctx "*") (binding-exists? ctx "/")
+         (eq-object result (mk-number "21")))))
+
+(deftest test-maru-primitive-lambda
+  nil)
+#|
+  (let* ((ctx (maru-initialize))
+         (src "(define fn (lambda (a b) (* a (+ 2 b))))")
+         (lambda-sym (mk-symbol "lambda"))
+         (result (maru-all-transforms ctx src)))
+    (declare (ignore result))
+         ; did we add 'lambda' successfully
+    (and (member lambda-sym (maru-context-symbols ctx) :test #'eq-object)
+         (eq-object (mk-number "40")
+                    (maru-all-transforms ctx "(fn 2 (fn 3 4))")))))
+|#
 
 (deftest test-applicator-from-internal
   "should be able to take an applicator and get it's internal function"
