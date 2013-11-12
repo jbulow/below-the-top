@@ -239,7 +239,7 @@
 
 (defun maru-lookup (ctx symbol)
   (unless (member symbol (maru-context-symbols ctx) :test #'eq-object)
-    (error (format nil "symbol ~A has not been interned!"
+    (error (format nil "symbol '~A' has not been interned!"
                        (object-value symbol))))
   (labels ((l-up (env)
              (when (null env)
@@ -267,6 +267,8 @@
                      (mk-expr #'maru-primitive-car))
     (maru-define ctx (maru-intern ctx "cdr")
                      (mk-expr #'maru-primitive-cdr))
+    (maru-define ctx (maru-intern ctx "and")
+                     (mk-form #'maru-primitive-and))
 
     ;; compositioners
     (maru-define ctx (maru-intern ctx "*expanders*") (mk-array 32))
@@ -311,6 +313,14 @@
   (declare (ignore ctx args))
   nil)
 
+; form
+(defun maru-primitive-and (ctx &rest args)
+  (let ((out (mk-symbol "t"))
+        (eval-transformer (make-transformer :name 'eval)))
+    (dolist (pred args out)
+      (setf out (transform eval-transformer pred ctx))
+      (when (maru-nil? out)
+        (return out)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;  maru type transformer
@@ -388,6 +398,12 @@
 
 (defun mk-fixed (fn)
   (make-instance 'fixed-object :function fn))
+
+(defclass form-object (function-object)
+  ())
+
+(defun mk-form (fn)
+  (make-instance 'form-object :function fn))
 
 (defmethod eq-object ((lhs basic-object) (rhs (eql nil)))
   nil)
@@ -510,7 +526,8 @@
   (let ((binding (maru-lookup *ctx* object)))
     (if binding
         `(nil . ,binding)
-        (error (format nil "arg ~A is undefined" (object-value object))))))
+        (error (format nil "arg '~A' is undefined"
+                           (object-value object))))))
 
 (defmethod inform ((object symbol-object)
                    (transformer-name (eql 'eval))
@@ -524,7 +541,7 @@
   (let ((binding (maru-lookup *ctx* object)))
     (if binding
         (pass binding 'eval args)
-        (error (format nil "~A is undefined" (object-value object))))))
+        (error (format nil "'~A' is undefined" (object-value object))))))
 
 ;;;;;;;;;; function object ;;;;;;;;;;
 
@@ -908,6 +925,20 @@
          (typed-expr (transform type-transformer untyped-expr ctx)))
     (eq-object (mk-number "200")
                (transform eval-transformer typed-expr ctx))))
+
+(deftest test-maru-primitive-and
+  (let ((ctx (maru-initialize)))
+    (and (eq-object (mk-string "last")
+                    (funcall (function-object-fn
+                               (maru-lookup ctx (mk-symbol "and")))
+                             ctx
+                             (mk-string "first") (mk-string "second")
+                             (mk-string "last")))
+         (maru-nil? (funcall (function-object-fn
+                               (maru-lookup ctx (mk-symbol "and")))
+                             ctx
+                             (mk-string "first") (mk-string "second")
+                             (mk-string "third") (mk-list))))))
 
 (deftest test-applicator-from-internal
   "should be able to take an applicator and get it's internal function"
