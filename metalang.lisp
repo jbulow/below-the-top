@@ -546,6 +546,26 @@
     `(nil . ,(apply fn *ctx* args))))
 
 
+;;;;;;;;;; fixed object ;;;;;;;;;;
+
+(defmethod inform ((object fixed-object)
+                   (transformer-name (eql 'eval))
+                   (whatami (eql 'arg)))
+  object)
+
+(defmethod inform ((object fixed-object)
+                   (transformer-name (eql 'eval))
+                   (whatami (eql 'lead)))
+  t)
+
+(defmethod pass ((object fixed-object)
+                 (transformer-name (eql 'eval))
+                 (args list))
+  (declare (special *ctx*))
+  (let ((fn (function-object-fn object)))
+    `(nil . ,(apply fn *ctx* args))))
+
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;            Tests
@@ -875,15 +895,19 @@
                              (mk-number "12")           ;; then
                              (mk-number "14"))))))      ;; else
 
-(deftest test-maru-primitive-if
-  nil)
-#|
-  (let ((ctx (maru-initialize)))
-    (and (equal 2 (funcall (lookup ctx 'if) '(1 2 3) ctx))
-         (equal 4 (funcall (lookup ctx 'if) '(() 12 4) ctx))
-         (equal "str" (funcall (lookup ctx 'if) '(t "str") ctx))
-         (equal '() (funcall (lookup ctx 'if) '(() "other") ctx)))))
-|#
+(defun mk-untyped-if (pred then else)
+  (untype-everything
+    (tokenize
+      (next-char-factory (format nil "(if ~A ~A ~A)" pred then else)))))
+
+(deftest test-maru-eval-with-fixed
+  (let* ((ctx (maru-initialize))
+         (eval-transformer (make-transformer :name 'eval))
+         (untyped-expr (mk-untyped-if "100" "200" "300"))
+         (type-transformer (make-transformer :name 'type))
+         (typed-expr (transform type-transformer untyped-expr ctx)))
+    (eq-object (mk-number "200")
+               (transform eval-transformer typed-expr ctx))))
 
 (deftest test-applicator-from-internal
   "should be able to take an applicator and get it's internal function"
