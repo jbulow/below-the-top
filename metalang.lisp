@@ -282,6 +282,8 @@
                      (mk-expr #'maru-primitive-cdr))
     (maru-define ctx (maru-intern ctx "and")
                      (mk-form #'maru-primitive-and))
+    (maru-define ctx (maru-intern ctx "define")
+                     (mk-form #'maru-primitive-define))
 
     ;; compositioners
     (maru-define ctx (maru-intern ctx "*expanders*") (mk-array 32))
@@ -334,6 +336,13 @@
       (setf out (transform eval-transformer pred ctx))
       (when (maru-nil? out)
         (return out)))))
+
+; form
+(defun maru-primitive-define (ctx &rest args)
+  (let ((eval-transformer (make-transformer :name 'eval)))
+    (maru-define ctx (car args) (transform eval-transformer
+                                           (cadr args) ctx))))
+
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;  maru type transformer
@@ -1004,12 +1013,13 @@
     (tokenize
       (next-char-factory src))))
 
+(defun type-expr (ctx src)
+  (transform (make-transformer :name 'type) (untype-expr src) ctx))
+
 (deftest test-maru-eval-with-fixed
   (let* ((ctx (maru-initialize))
          (eval-transformer (make-transformer :name 'eval))
-         (untyped-expr (untype-expr "(if 100 200 300)"))
-         (type-transformer (make-transformer :name 'type))
-         (typed-expr (transform type-transformer untyped-expr ctx)))
+         (typed-expr (type-expr ctx "(if 100 200 300)")))
     (eq-object (mk-number "200")
                (transform eval-transformer typed-expr ctx))))
 
@@ -1030,9 +1040,7 @@
 (deftest test-maru-eval-with-form
   (let* ((ctx (maru-initialize))
          (expand-transformer (make-transformer :name 'expand))
-         (untyped-expr (untype-expr "(and 1 2 3 20)"))
-         (type-transformer (make-transformer :name 'type))
-         (typed-expr (transform type-transformer untyped-expr ctx)))
+         (typed-expr (type-expr ctx "(and 1 2 3 20)")))
     (eq-object (mk-number "20")
                (transform expand-transformer typed-expr ctx))))
 
@@ -1040,14 +1048,26 @@
   (let* ((ctx (maru-initialize))
          (expand-transformer (make-transformer :name 'expand))
          (eval-transformer (make-transformer :name 'eval))
-         (untyped-expr
-           (untype-expr "(cons (and 1 3 \"hello\") \"world\")"))
-         (type-transformer (make-transformer :name 'type))
-         (typed-expr (transform type-transformer untyped-expr ctx))
+         (typed-expr
+           (type-expr ctx "(cons (and 1 3 \"hello\") \"world\")"))
          (expanded-expr (transform expand-transformer typed-expr ctx))
          (evaled-expr (transform eval-transformer expanded-expr ctx)))
     (and (eq-object (car evaled-expr) (mk-string "hello"))
          (eq-object (cdr evaled-expr) (mk-string "world")))))
+
+(deftest test-maru-primitive-define
+  (let* ((ctx (maru-initialize))
+         (expand-transformer (make-transformer :name 'expand))
+         (typed-expr (type-expr ctx "(define a \"some-value\")"))
+         (def-sym (mk-symbol "define"))
+         (a-sym (mk-symbol "a"))
+         (evaled-expr (transform expand-transformer typed-expr ctx)))
+    (declare (ignore evaled-expr))
+         ; did we add 'define' successfully?
+    (and (member def-sym (maru-context-symbols ctx) :test #'eq-object)
+         ; did we add 'a' successfully with define?
+         (member a-sym (maru-context-symbols ctx) :test #'eq-object)
+         (eq-object (mk-string "some-value") (maru-lookup ctx a-sym)))))
 
 (deftest test-applicator-from-internal
   "should be able to take an applicator and get it's internal function"
