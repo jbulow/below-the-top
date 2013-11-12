@@ -9,9 +9,22 @@
 ;;;; > How do we handle environments?
 ;;;;   + global and local environments; global environments must be shared
 ;;;;     between unconnected sexpressions
-;;;; > How do we want to handle lists? Do we want to support eval_pair like
-;;;    behavior in our infrastructure? Does it even make sense in our
-;;;    model?
+;;;; > How do we want to handle lists? Do we want to support eval_pair
+;;;;   like behavior in our infrastructure? Does it even make sense in
+;;;;   our model?
+;;;;   + ((do-something 1 2) 3 4)   ; must send message to list form
+;;;;   + ()                         ; indiciates not true
+;;;;
+;;;; > Determine the best way to consolidate default behaviors in
+;;;;   transformations.
+;;;;
+;;;; NOTES
+;;;; . forwarding dispatches to symbol objects (because things that
+;;;;   are relevant to a transformation (ie macros) are binded to
+;;;;   symbols) hides intent to some extent?
+;;;;   > for traditional sexpression languages where must application
+;;;;     is done by looking up the symbol then composing on it's binding
+;;;;     this is a very prominent feature; how should it be encoded?
 
 (proclaim '(optimize (debug 3)))
 
@@ -534,13 +547,14 @@
                    (whatami (eql 'lead)))
   t)
 
+;;; OF-NOTE: forwarding
 (defmethod pass ((object symbol-object)
                  (transformer-name (eql 'eval))
                  (args list))
   (declare (special *ctx*))
   (let ((binding (maru-lookup *ctx* object)))
     (if binding
-        (pass binding 'eval args)
+        (pass binding 'eval args)       ; must forward to actual function
         (error (format nil "'~A' is undefined" (object-value object))))))
 
 ;;;;;;;;;; function object ;;;;;;;;;;
@@ -577,6 +591,79 @@
 
 (defmethod pass ((object fixed-object)
                  (transformer-name (eql 'eval))
+                 (args list))
+  (declare (special *ctx*))
+  (let ((fn (function-object-fn object)))
+    `(nil . ,(apply fn *ctx* args))))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;  maru expansion transformer
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;;;;;;;;; basic object ;;;;;;;;;;
+;;; > FIXME: should use *expanders*
+
+;; if a type does not have a specific expansion semantic; it just
+;; evaluates to itself
+(defmethod inform ((object basic-object)
+                   (transformer-name (eql 'expand))
+                   (whatami (eql 'arg)))
+  `(nil . ,object))
+
+(defmethod inform ((object basic-object)
+                   (transformer-name (eql 'expand))
+                   (whatami (eql 'lead)))
+  t)
+
+(defmethod pass ((object basic-object)
+                 (trasformer-name (eql 'expand))
+                 (args list))
+  `(nil . ,(cons object args)))
+
+
+;;;;;;;;;; symbol object ;;;;;;;;;;
+
+(defmethod inform ((object symbol-object)
+                   (transformer-name (eql 'expand))
+                   (whatami (eql 'arg)))
+  (declare (special *ctx*))
+  (let ((binding (maru-lookup *ctx* object)))
+    (if binding
+        `(nil . ,binding)
+        (error (format nil "arg '~A' is undefined"
+                           (object-value object))))))
+
+(defmethod inform ((object symbol-object)
+                   (transformer-name (eql 'expand))
+                   (whatami (eql 'lead)))
+  nil)
+
+;;; OF-NOTE: forwarding
+(defmethod pass ((object symbol-object)
+                 (transformer-name (eql 'expand))
+                 (args list))
+  (declare (special *ctx*))
+  (let ((binding (maru-lookup *ctx* object)))
+    (if binding
+        (pass binding 'expand args)   ; must forward to actual form
+        (error (format nil "'~A' is undefined" (object-value object))))))
+
+
+;;;;;;;;;; form object ;;;;;;;;;;
+
+(defmethod inform ((object form-object)
+                   (transformer-name (eql 'expand))
+                   (whatami (eql 'arg)))
+  object)
+
+(defmethod inform ((object form-object)
+                   (transformer-name (eql 'expand))
+                   (whatami (eql 'lead)))
+  nil)
+
+(defmethod pass ((object form-object)
+                 (transformer-name (eql 'expand))
                  (args list))
   (declare (special *ctx*))
   (let ((fn (function-object-fn object)))
@@ -912,15 +999,15 @@
                              (mk-number "12")           ;; then
                              (mk-number "14"))))))      ;; else
 
-(defun mk-untyped-if (pred then else)
+(defun untype-expr (src)
   (untype-everything
     (tokenize
-      (next-char-factory (format nil "(if ~A ~A ~A)" pred then else)))))
+      (next-char-factory src))))
 
 (deftest test-maru-eval-with-fixed
   (let* ((ctx (maru-initialize))
          (eval-transformer (make-transformer :name 'eval))
-         (untyped-expr (mk-untyped-if "100" "200" "300"))
+         (untyped-expr (untype-expr "(if 100 200 300)"))
          (type-transformer (make-transformer :name 'type))
          (typed-expr (transform type-transformer untyped-expr ctx)))
     (eq-object (mk-number "200")
@@ -939,6 +1026,28 @@
                              ctx
                              (mk-string "first") (mk-string "second")
                              (mk-string "third") (mk-list))))))
+
+(deftest test-maru-eval-with-form
+  (let* ((ctx (maru-initialize))
+         (expand-transformer (make-transformer :name 'expand))
+         (untyped-expr (untype-expr "(and 1 2 3 20)"))
+         (type-transformer (make-transformer :name 'type))
+         (typed-expr (transform type-transformer untyped-expr ctx)))
+    (eq-object (mk-number "20")
+               (transform expand-transformer typed-expr ctx))))
+
+(deftest test-maru-simple-expand-and-eval
+  (let* ((ctx (maru-initialize))
+         (expand-transformer (make-transformer :name 'expand))
+         (eval-transformer (make-transformer :name 'eval))
+         (untyped-expr
+           (untype-expr "(cons (and 1 3 \"hello\") \"world\")"))
+         (type-transformer (make-transformer :name 'type))
+         (typed-expr (transform type-transformer untyped-expr ctx))
+         (expanded-expr (transform expand-transformer typed-expr ctx))
+         (evaled-expr (transform eval-transformer expanded-expr ctx)))
+    (and (eq-object (car evaled-expr) (mk-string "hello"))
+         (eq-object (cdr evaled-expr) (mk-string "world")))))
 
 (deftest test-applicator-from-internal
   "should be able to take an applicator and get it's internal function"
