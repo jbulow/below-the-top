@@ -14,9 +14,10 @@
 ;;;;   our model?
 ;;;;   + ((do-something 1 2) 3 4)   ; must send message to list form
 ;;;;   + ()                         ; indiciates not true
-;;;;
 ;;;; > Determine the best way to consolidate default behaviors in
 ;;;;   transformations.
+;;;; > write macros to cleanup maru initialization
+;;;;   + arithmetic
 ;;;;
 ;;;; NOTES
 ;;;; . forwarding dispatches to symbol objects (because things that
@@ -224,14 +225,15 @@
            :type maru-env)))
 
 (defstruct maru-context
-  env
-  symbols)
+  (env (make-instance 'maru-env))
+  (symbols (list (mk-symbol "dummy-so-prepend-doesnt-break"))))  ; hack
 
-(defun maru-mk-ctx (&key parent)
-  (let ((env (make-instance 'maru-env
-                :bindings nil
-                :parent parent)))
-    (make-maru-context :env env :symbols nil)))
+(defun maru-mk-ctx (&key parent-ctx)
+  (if parent-ctx
+      (make-maru-context :env (make-instance 'maru-env
+                                :parent (maru-context-env parent-ctx))
+                         :symbols (maru-context-symbols parent-ctx))
+      (make-maru-context)))
 
 (defun maru-parent-ctx (ctx)
   (let ((new-ctx (copy-structure ctx)))
@@ -241,7 +243,7 @@
 
 (defun maru-intern (ctx text)
   (let ((symbol (mk-symbol text)))
-    (car (push symbol (maru-context-symbols ctx)))))
+    (car (prepend symbol (maru-context-symbols ctx)))))
 
 (defun maru-define (ctx symbol obj)
   (assert (typep symbol 'symbol-object))
@@ -284,6 +286,8 @@
                      (mk-form #'maru-primitive-and))
     (maru-define ctx (maru-intern ctx "define")
                      (mk-form #'maru-primitive-define))
+    (maru-define ctx (maru-intern ctx "lambda")
+                     (mk-fixed #'maru-primitive-lambda))
     (maru-define ctx (maru-intern ctx "+")
                      (mk-expr #'maru-primitive-add))
     (maru-define ctx (maru-intern ctx "-")
@@ -308,6 +312,9 @@
   (let ((symbol (mk-symbol sym)))
     (and (maru-lookup ctx symbol)
          (member symbol (maru-context-symbols ctx) :test #'eq-object))))
+
+(defun maru-spawn-child-env (ctx)
+  (maru-mk-ctx :parent-ctx ctx))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -356,6 +363,9 @@
   (let ((eval-transformer (make-transformer :name 'eval)))
     (maru-define ctx (car args) (transform eval-transformer
                                            (cadr args) ctx))))
+; fixed
+(defun maru-primitive-lambda (ctx &rest args)
+  (mk-closure ctx args))
 
 ; expr
 (defun maru-primitive-add (ctx &rest args)
@@ -441,6 +451,15 @@
 
 (defun mk-array (size)
   (make-instance 'array-object :elements (make-array size)))
+
+(defclass runtime-closure-object ()
+  ((src :accessor runtime-closure-object-src
+        :initarg  :src)
+   (ctx :accessor runtime-closure-object-ctx
+        :initarg  :ctx)))
+
+(defun mk-closure (ctx src)
+  (make-instance 'closure-object :ctx ctx :src src))
 
 (defclass function-object (basic-object)
   ((function :accessor function-object-fn
@@ -603,6 +622,7 @@
         (pass binding 'eval args)       ; must forward to actual function
         (error (format nil "'~A' is undefined" (object-value object))))))
 
+
 ;;;;;;;;;; function object ;;;;;;;;;;
 
 (defmethod inform ((object expr-object)
@@ -641,6 +661,34 @@
   (declare (special *ctx*))
   (let ((fn (function-object-fn object)))
     `(nil . ,(apply fn *ctx* args))))
+
+;;;;;;;;;; runtime closure object ;;;;;;;;;;
+
+(defmethod inform ((object runtime-closure-object)
+                   (transformer-name (eql 'eval))
+                   (whatami (eql 'arg)))
+  object)
+
+(defmethod inform ((object runtime-closure-object)
+                   (transformer-name (eql 'eval))
+                   (whatami (eql 'lead)))
+  t)
+
+(defmethod pass ((object runtime-closure-object)
+                 (transformer-name (eql 'eval))
+                 (args list))
+  (let ((child-ctx nil)
+        (eval-transformer (make-transformer :name 'eval)))
+    (declare (special *ctx*))
+    ;; create lexical env
+    (setf child-ctx (maru-spawn-child-env *ctx*))
+    ;; add arguments/parameters to lexical env
+    (dolist (arg-param (zip (car (runtime-closure-object-src object))
+                            args))
+      (maru-define child-ctx (car arg-param) (cadr arg-param)))
+    ;; apply the function in the lexical env
+    (transform eval-transformer
+               child-ctx (cdr (runtime-closure-object-src object)))))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -947,9 +995,7 @@
          (= 1 (length (maru-env-bindings (maru-context-env ctx)))))))
 
 (deftest test-maru-lookup
-  (let* ((ctx (maru-mk-ctx :parent (make-instance 'maru-env
-                                     :bindings nil
-                                     :parent nil)))
+  (let* ((ctx (maru-mk-ctx :parent-ctx (maru-mk-ctx)))
          (obj (mk-number "43"))
          (sym "some-symbol")
          (obj2 (mk-string "thisandthat"))
@@ -1120,8 +1166,6 @@
          (eq-object result (mk-number "21")))))
 
 (deftest test-maru-primitive-lambda
-  nil)
-#|
   (let* ((ctx (maru-initialize))
          (src "(define fn (lambda (a b) (* a (+ 2 b))))")
          (lambda-sym (mk-symbol "lambda"))
@@ -1131,10 +1175,40 @@
     (and (member lambda-sym (maru-context-symbols ctx) :test #'eq-object)
          (eq-object (mk-number "40")
                     (maru-all-transforms ctx "(fn 2 (fn 3 4))")))))
-|#
 
 (deftest test-applicator-from-internal
   "should be able to take an applicator and get it's internal function"
   nil)
 
-
+(deftest test-maru-spawn-child-env
+  (let ((ctx (maru-initialize))
+        (child-ctx nil))
+    (maru-intern ctx "this")
+    (maru-define ctx (maru-intern ctx "that") (mk-number "15"))
+    (setf child-ctx (maru-spawn-child-env ctx))
+    (maru-intern child-ctx "or")
+    (maru-define child-ctx (maru-intern child-ctx "theother")
+                           (mk-number "16"))
+         ;; added stuff to parent env?
+    (and (not (binding-exists? ctx "this"))
+         (member (mk-symbol "this") (maru-context-symbols ctx)
+                 :test #'eq-object)
+         (binding-exists? ctx "that")
+         ;; didn't add stuff that was meant for child env
+         (not (binding-exists? ctx "or"))
+         (not (binding-exists? ctx "theother"))
+         ; child symbols still valid
+         (member (mk-symbol "or") (maru-context-symbols ctx)
+                 :test #'eq-object)
+         (member (mk-symbol "theother") (maru-context-symbols ctx)
+                 :test #'eq-object)
+         ;; added stuff to child env
+         (not (binding-exists? child-ctx "or"))
+         (member (mk-symbol "or") (maru-context-symbols child-ctx)
+                 :test #'eq-object)
+         (binding-exists? child-ctx "theother")
+         ;; can still get stuff from parent env
+         (not (binding-exists? child-ctx "this"))
+         (member (mk-symbol "this") (maru-context-symbols child-ctx)
+                 :test #'eq-object)
+         (binding-exists? child-ctx "that"))))
