@@ -1220,8 +1220,13 @@
                (maru-all-transforms ctx "(fn a)"))))
 
 (deftest test-maru-pass-cons-to-lambda
-  "should be able to pass cons cells to lambdas"
-  nil)
+  (let* ((ctx (maru-initialize))
+         (src0 "(define k (cons 1 (cons 2 3)))")
+         (src1 "(define fn (lambda (l) (car (cdr l))))"))
+    (maru-all-transforms ctx src0)
+    (maru-all-transforms ctx src1)
+    (eq-object (mk-number "2")
+               (maru-all-transforms ctx "(fn k)"))))
 
 (deftest test-maru-lambda-no-mutate-scalar
   "lambdas should not mutate scalar values in an outer env"
