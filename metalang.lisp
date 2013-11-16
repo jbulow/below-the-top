@@ -335,17 +335,19 @@
 (defun maru-primitive-cons (ctx &rest args)
   (declare (ignore ctx))
   (assert (= 2 (length args)))
-  (cons (car args) (cadr args)))
+  (mk-list (car args) (cadr args)))
 
 ; expr
 (defun maru-primitive-car (ctx &rest args)
-  (declare (ignore ctx args))
-  nil)
+  (declare (ignore ctx))
+  (assert (and (= 1 (length args)) (typep (car args) 'list-object)))
+  (maru-car (car args)))
 
 ; expr
 (defun maru-primitive-cdr (ctx &rest args)
-  (declare (ignore ctx args))
-  nil)
+  (declare (ignore ctx))
+  (assert (and (= 1 (length args)) (typep (car args) 'list-object)))
+  (maru-cdr (car args)))
 
 ; fixed
 (defun maru-primitive-and (ctx &rest args)
@@ -421,6 +423,18 @@
 ;;;   the empty list
 (defun mk-list (&rest elements)
   (make-instance 'list-object :elements elements))
+
+(defun maru-car (maru-list)
+  (assert (typep maru-list 'list-object))
+  (car (list-object-elements maru-list)))
+
+;;; the 'cdr' of a two element list is the second element
+;;; NOTE: Do these semantics match that of pairs?
+(defun maru-cdr (maru-list)
+  (assert (typep maru-list 'list-object))
+  (if (= 2 (length (list-object-elements maru-list)))
+      (nth 1 (list-object-elements maru-list))
+      (apply #'mk-list (cdr (list-object-elements maru-list)))))
 
 (defclass number-object (single-value-object)
   ())
@@ -1048,8 +1062,8 @@
           (funcall (function-object-fn
                      (maru-lookup ctx (maru-intern ctx "cons")))
                    ctx a b))
-    (and (eq-object a (car out))
-         (eq-object b (cdr out)))))
+    (and (eq-object a (maru-car out))
+         (eq-object b (maru-cdr out)))))
 
 (deftest test-maru-eval-transform-simple
   (let* ((ctx (maru-initialize))
@@ -1061,8 +1075,8 @@
          (typed-expr (transform type-transformer untyped-expr ctx))
          (out nil))
     (setf out (transform eval-transformer typed-expr ctx))
-    (and (eq-object (car out) (mk-string "kewl"))
-         (eq-object (cdr out) (mk-number "22")))))
+    (and (eq-object (maru-car out) (mk-string "kewl"))
+         (eq-object (maru-cdr out) (mk-number "22")))))
 
 (deftest test-maru-eval-transform-simple-bindings
   (let* ((ctx (maru-initialize))
@@ -1077,9 +1091,9 @@
     (maru-define ctx (mk-symbol "yessuh") (mk-number "100"))
     (maru-define ctx (mk-symbol "kewl") (mk-string "astronauts"))
     (setf out (transform eval-transformer typed-expr ctx))
-    (and (eq-object (car out)  (mk-string "astronauts"))
-         (eq-object (cadr out) (mk-number "100"))
-         (eq-object (cddr out)  (mk-number "22")))))
+    (and (eq-object (maru-car out)  (mk-string "astronauts"))
+         (eq-object (maru-car (maru-cdr out)) (mk-number "100"))
+         (eq-object (maru-cdr (maru-cdr out)) (mk-number "22")))))
 
 (deftest test-maru-primitive-if-simple
   (let ((ctx (maru-initialize)))
@@ -1149,8 +1163,8 @@
          (evaled-expr
            (maru-all-transforms ctx
                                 "(cons (and 1 3 \"hello\") \"world\")")))
-    (and (eq-object (car evaled-expr) (mk-string "hello"))
-         (eq-object (cdr evaled-expr) (mk-string "world")))))
+    (and (eq-object (maru-car evaled-expr) (mk-string "hello"))
+         (eq-object (maru-cdr evaled-expr) (mk-string "world")))))
 
 (deftest test-maru-primitive-define
   (let* ((ctx (maru-initialize))
@@ -1247,3 +1261,12 @@
          (member (mk-symbol "this") (maru-context-symbols child-ctx)
                  :test #'eq-object)
          (binding-exists? child-ctx "that"))))
+
+(deftest test-maru-list
+  (let ((list-object (mk-list (mk-number "1") (mk-string "yes")
+                              (mk-string "goat"))))
+    (and (eq-object (mk-number "1") (maru-car list-object))
+         (eq-object (mk-string "yes") (maru-car (maru-cdr list-object)))
+         (eq-object (mk-list (mk-string "yes") (mk-string "goat"))
+                    (maru-cdr list-object)))))
+
