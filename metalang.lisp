@@ -109,6 +109,9 @@
            (list "unquote-splicing" (tokenize next-char-fn read-table)))
           (t (list "unquote" (tokenize next-char-fn read-table))))))
 
+(defun quote-handler (next-char-fn read-table)
+  (list "quote" (tokenize next-char-fn read-table)))
+
 (defun read-macro? (c read-table)
   (assoc c read-table :test #'char=))
 
@@ -932,9 +935,18 @@
 (deftest test-unquote-handler
   (let ((next-char-fn
           (next-char-factory ",something")))
+    ;; consume the comma
     (funcall next-char-fn)
     (equal (unquote-handler next-char-fn nil)
            '("unquote" "something"))))
+
+(deftest test-quote-handler
+  (let ((next-char-fn
+          (next-char-factory "'this")))
+    ;; consume the quote
+    (funcall next-char-fn)
+    (equal (quote-handler next-char-fn nil)
+           '("quote" "this"))))
 
 (deftest test-desugar
   (let ((next-char-fn
@@ -943,6 +955,13 @@
     (equal (tokenize next-char-fn read-table)
            '("this" ("unquote-splicing" ("is" "text")) ("unquote" "so")
              "is" ("unquote" ("unquote" "this"))))))
+
+(deftest test-desugar-quote
+  (let ((next-char-fn
+          (next-char-factory "(123 ''and '(a b c))"))
+        (read-table '((#\' . quote-handler))))
+    (equal (tokenize next-char-fn read-table)
+           '("123" ("quote" ("quote" "and")) ("quote" ("a" "b" "c"))))))
 
 (deftest test-next-char-factory-peek-bug
   (let ((next-char-fn
