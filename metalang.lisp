@@ -393,7 +393,8 @@
 
 ; fixed
 (defun maru-primitive-lambda (ctx &rest args)
-  (mk-closure ctx args))
+  (mk-closure ctx (list (car args)
+                        (cons (mk-symbol "block") (cdr args)))))
 
 ; expr
 (defun maru-primitive-add (ctx &rest args)
@@ -1313,12 +1314,25 @@
                     (maru-all-transforms ctx src0))
          (eq-object (mk-pair (mk-number "15") (mk-number "2"))
                     (maru-all-transforms ctx a))
+         ;; empty block should return nil
          (eq-object (maru-all-transforms ctx "(block)")
                     (maru-nil)))))
 
 (deftest test-lambda-implicit-block
-  "lambdas should have implicit blocks; state mutator before testable"
-  nil)
+  "lambdas have implicit blocks"
+  (let* ((ctx (maru-initialize))
+         (src0 "(block
+                  (define g (cons 12 13))
+                  (define fn (lambda (a)
+                                (set-car a 20)
+                                250
+                                300))
+                  (fn g))")
+         (gee "(cons (car g) (cdr g))"))
+    (and (eq-object (mk-number "300")
+                    (maru-all-transforms ctx src0))
+         (eq-object (mk-pair (mk-number "20") (mk-number "13"))
+                    (maru-all-transforms ctx gee)))))
 
 (deftest test-applicator-from-internal
   "should be able to take an applicator and get it's internal function"
