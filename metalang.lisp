@@ -303,6 +303,8 @@
                      (mk-expr #'maru-primitive-mul))
     (maru-define ctx (maru-intern ctx "/")
                      (mk-expr #'maru-primitive-div))
+    (maru-define ctx (maru-intern ctx "set")
+                     (mk-form #'maru-primitive-set))
 
     ;; compositioners
     (maru-define ctx (maru-intern ctx "*expanders*") (mk-array 32))
@@ -424,6 +426,14 @@
   (declare (ignore ctx))
   (mk-number (to-string (floor (object-value (car args))
                                (object-value (cadr args))))))
+
+; form
+(defun maru-primitive-set (ctx &rest args)
+  (cond ((listp (car args))
+         (cons (mk-symbol (scat "set-" (object-value (caar args))))
+               (cons (cadar args) (cdr args))))
+        (t (maru-lookup ctx (car args))
+           (cons (mk-symbol "define") args))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;  maru type transformer
@@ -1509,4 +1519,32 @@
                     (maru-all-transforms ctx car-list))
          (eq-object (mk-number "250")
                     (maru-all-transforms ctx cdr-list)))))
+
+(deftest test-maru-macro-symbol-eval-bug
+  ~"this bug is hard to test for; other than to say that this should run;"
+  ~" the problem was the expand was evaluating symbols are were already"
+  " binded to non-macros"
+  (let* ((ctx (maru-initialize))
+         (src0 "(block
+                  (define tt 10)
+                  (define ff (lambda (tt) 5))
+                  (ff 12))"))
+    (eq-object (mk-number "5") (maru-all-transforms ctx src0))))
+
+(deftest test-maru-set-macro-primitive
+  (let* ((ctx (maru-initialize))
+         (src0 "(block
+                  (define set-something (lambda (x y) (+ x y)))
+                  (set (something 15) 20))"))
+    (eq-object (mk-number "35")
+               (maru-all-transforms ctx src0))))
+
+(deftest test-maru-set-runtime-primitive
+  (let* ((ctx (maru-initialize))
+         (src0 "(block
+                  (define yesterday 55)
+                  (set yesterday 34)
+                  yesterday)"))
+    (eq-object (mk-number "34")
+               (maru-all-transforms ctx src0))))
 
