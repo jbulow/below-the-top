@@ -6,9 +6,6 @@
 ;;;; > translation manager, translations against sexpressions
 
 ;;;; TODO
-;;;; > How do we handle environments?
-;;;;   + global and local environments; global environments must be shared
-;;;;     between unconnected sexpressions
 ;;;; > How do we want to handle lists? Do we want to support eval_pair
 ;;;;   like behavior in our infrastructure? Does it even make sense in
 ;;;;   our model?
@@ -18,6 +15,7 @@
 ;;;;   transformations.
 ;;;; > write macros to cleanup maru initialization
 ;;;;   + arithmetic
+;;;; > *applicators*, *expanders*
 ;;;;
 ;;;; NOTES
 ;;;; . forwarding dispatches to symbol objects (because things that
@@ -283,7 +281,7 @@
     (maru-define ctx (maru-intern ctx "cdr")
                      (mk-expr #'maru-primitive-cdr))
     (maru-define ctx (maru-intern ctx "and")
-                     (mk-form #'maru-primitive-and))
+                     (mk-fixed #'maru-primitive-and))
     (maru-define ctx (maru-intern ctx "define")
                      (mk-form #'maru-primitive-define))
     (maru-define ctx (maru-intern ctx "lambda")
@@ -349,7 +347,7 @@
   (declare (ignore ctx args))
   nil)
 
-; form
+; fixed
 (defun maru-primitive-and (ctx &rest args)
   (let ((out (mk-symbol "t"))
         (eval-transformer (make-transformer :name 'eval)))
@@ -1141,7 +1139,7 @@
 
 (deftest test-maru-eval-with-form
   (let* ((ctx (maru-initialize))
-         (expand-transformer (make-transformer :name 'expand))
+         (expand-transformer (make-transformer :name 'eval))
          (typed-expr (type-expr ctx "(and 1 2 3 20)")))
     (eq-object (mk-number "20")
                (transform expand-transformer typed-expr ctx))))
@@ -1184,9 +1182,30 @@
     (declare (ignore result))
          ; did we add 'lambda' successfully
     (and (member lambda-sym (maru-context-symbols ctx) :test #'eq-object)
+         ; does the lambda compute the value?
          (eq-object (mk-number "40")
                     (maru-all-transforms ctx "(fn 2 (fn 3 4))")))))
 
+(deftest test-maru-pass-scalar-to-lambda
+  (let* ((ctx (maru-initialize))
+         (src0 "(define a 100)")
+         (src1 "(define fn (lambda (x) (+ 200 x)))"))
+    (maru-all-transforms ctx src0)
+    (maru-all-transforms ctx src1)
+    (eq-object (mk-number "300")
+               (maru-all-transforms ctx "(fn a)"))))
+
+(deftest test-maru-pass-cons-to-lambda
+  "should be able to pass cons cells to lambdas"
+  nil)
+
+(deftest test-maru-lambda-no-mutate-scalar
+  "lambdas should not mutate scalar values in an outer env"
+  nil)
+
+(deftest test-maru-lambda-mutate-cons-cell
+  "lambdas should be able to mutate cons cells from an outer env"
+  nil)
 
 (deftest test-lambda-implicit-block
   "lambdas should have implicit blocks; state mutator before testable"
