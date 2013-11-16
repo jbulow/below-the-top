@@ -249,7 +249,7 @@
 (defun maru-define (ctx symbol obj)
   (assert (typep symbol 'symbol-object))
   (when (maru-lookup ctx symbol)
-    (warn-me "redefining symbol"))
+    (warn-me (format nil "redefining symbol: ~A" (object-value symbol))))
   (car (push (cons symbol obj)
              (maru-env-bindings (maru-context-env ctx)))))
 
@@ -291,6 +291,8 @@
                      (mk-fixed #'maru-primitive-and))
     (maru-define ctx (maru-intern ctx "define")
                      (mk-form #'maru-primitive-define))
+    (maru-define ctx (maru-intern ctx "block")
+                     (mk-expr #'maru-primitive-block))
     (maru-define ctx (maru-intern ctx "lambda")
                      (mk-fixed #'maru-primitive-lambda))
     (maru-define ctx (maru-intern ctx "+")
@@ -382,6 +384,13 @@
   (let ((eval-transformer (make-transformer :name 'eval)))
     (cdr (maru-define ctx (car args) (transform eval-transformer
                                                 (cadr args) ctx)))))
+; expr
+(defun maru-primitive-block (ctx &rest args)
+  (declare (ignore ctx))
+  (if (zerop (length args))
+      (maru-nil)
+      (car (last args))))
+
 ; fixed
 (defun maru-primitive-lambda (ctx &rest args)
   (mk-closure ctx args))
@@ -780,7 +789,11 @@
 (defmethod inform ((object symbol-object)
                    (transformer-name (eql 'expand))
                    (whatami (eql 'lead)))
-  nil)
+  (declare (special *ctx*))
+  (let ((binding (maru-lookup *ctx* object)))
+    (if binding
+        (inform binding 'expand 'lead)
+        t)))
 
 ;;; OF-NOTE: forwarding
 (defmethod pass ((object symbol-object)
@@ -1211,6 +1224,14 @@
     (and (eq-object (maru-car evaled-expr) (mk-string "hello"))
          (eq-object (maru-cdr evaled-expr) (mk-string "world")))))
 
+(deftest test-maru-expand-bug
+  (let* ((ctx (maru-initialize))
+         (evaled-expr
+           (maru-all-transforms ctx
+                                "(cons (define a 3) 4)")))
+    (and (eq-object evaled-expr (mk-pair (mk-number "3")
+                                         (mk-number "4"))))))
+
 (deftest test-maru-primitive-define
   (let* ((ctx (maru-initialize))
          (expand-transformer (make-transformer :name 'expand))
@@ -1269,7 +1290,31 @@
 
 (deftest test-maru-lambda-mutate-cons-cell
   "lambdas should be able to mutate cons cells from an outer env"
-  nil)
+  (let* ((ctx (maru-initialize))
+         (src0 "(define c (cons 1001 2002))")
+         (src1 "(define mutate (lambda (e) (set-car e 5005)))")
+         (src2 "(mutate c)")
+         (cee "(cons (car c) (cdr c))"))    ; hack to get value of c
+    (maru-all-transforms ctx src0)
+    (maru-all-transforms ctx src1)
+    (and (eq-object (mk-number "5005")
+                    (maru-all-transforms ctx src2))
+         (eq-object (mk-pair (mk-number "5005") (mk-number "2002"))
+                    (maru-all-transforms ctx cee)))))
+
+(deftest test-maru-primitive-block
+  (let* ((ctx (maru-initialize))
+         (src0 "(block
+                  (define a (cons 1 2))
+                  (set-car a 15)
+                  100)")
+         (a "(cons (car a) (cdr a))"))
+    (and (eq-object (mk-number "100")
+                    (maru-all-transforms ctx src0))
+         (eq-object (mk-pair (mk-number "15") (mk-number "2"))
+                    (maru-all-transforms ctx a))
+         (eq-object (maru-all-transforms ctx "(block)")
+                    (maru-nil)))))
 
 (deftest test-lambda-implicit-block
   "lambdas should have implicit blocks; state mutator before testable"
@@ -1277,6 +1322,11 @@
 
 (deftest test-applicator-from-internal
   "should be able to take an applicator and get it's internal function"
+  nil)
+
+(deftest test-binding-precedence
+  ~"inner bindings should take precedence over outer bindings"
+  ~" with the same name"
   nil)
 
 (deftest test-maru-spawn-child-env
