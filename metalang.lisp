@@ -1335,7 +1335,18 @@
 
 (deftest test-maru-lambda-no-mutate-scalar
   "lambdas should not mutate scalar values in an outer env"
-  nil)
+  (let* ((ctx (maru-initialize))
+         (src0 "(block
+                  (define s 30)
+                  (define fn (lambda (j)
+                               (set j 45)
+                               (cons s j)))
+                  (fn s))")
+         (ess "(block s)"))
+    (and (eq-object (mk-pair (mk-number "30") (mk-number "45"))
+                    (maru-all-transforms ctx src0))
+         (eq-object (mk-number "30")
+                    (maru-all-transforms ctx ess)))))
 
 (deftest test-maru-lambda-mutate-cons-cell
   "lambdas should be able to mutate cons cells from an outer env"
