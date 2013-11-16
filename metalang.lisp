@@ -335,18 +335,18 @@
 (defun maru-primitive-cons (ctx &rest args)
   (declare (ignore ctx))
   (assert (= 2 (length args)))
-  (mk-list (car args) (cadr args)))
+  (mk-pair (car args) (cadr args)))
 
 ; expr
 (defun maru-primitive-car (ctx &rest args)
   (declare (ignore ctx))
-  (assert (and (= 1 (length args)) (typep (car args) 'list-object)))
+  (assert (and (= 1 (length args)) (typep (car args) 'pair-object)))
   (maru-car (car args)))
 
 ; expr
 (defun maru-primitive-cdr (ctx &rest args)
   (declare (ignore ctx))
-  (assert (and (= 1 (length args)) (typep (car args) 'list-object)))
+  (assert (and (= 1 (length args)) (typep (car args) 'pair-object)))
   (maru-cdr (car args)))
 
 ; fixed
@@ -414,27 +414,39 @@
 (defun mk-symbol (value)
   (make-instance 'symbol-object :value value))
 
-(defclass list-object (basic-object)
-  ((elements :accessor list-object-elements
-             :initarg  :elements)))
+(defclass pair-object (basic-object)
+  ((car :accessor pair-object-car
+        :initarg :car)
+   (cdr :accessor pair-object-cdr
+        :initarg :cdr)))
 
-;;; unclear whether we should use 'mk-pair' instead
-;;; > using a list object is nice because we easily represent nil with
-;;;   the empty list
+(defclass nil-object (pair-object)
+  ())
+
+(defun mk-pair (car cdr)
+  (make-instance 'pair-object :car car
+                              :cdr cdr))
+
 (defun mk-list (&rest elements)
-  (make-instance 'list-object :elements elements))
+  (if (zerop (length elements))
+      (maru-nil)
+      (make-instance 'pair-object :car (car elements)
+                                  :cdr (apply #'mk-list (cdr elements)))))
 
-(defun maru-car (maru-list)
-  (assert (typep maru-list 'list-object))
-  (car (list-object-elements maru-list)))
+(defun maru-nil ()
+  (make-instance 'nil-object))
 
-;;; the 'cdr' of a two element list is the second element
-;;; NOTE: Do these semantics match that of pairs?
-(defun maru-cdr (maru-list)
-  (assert (typep maru-list 'list-object))
-  (if (= 2 (length (list-object-elements maru-list)))
-      (nth 1 (list-object-elements maru-list))
-      (apply #'mk-list (cdr (list-object-elements maru-list)))))
+(defgeneric maru-car (pair-object)
+  (:method ((pair pair-object))
+    (pair-object-car pair))
+  (:method ((pair nil-object))
+    (maru-nil)))
+
+(defgeneric maru-cdr (pair-object)
+  (:method ((pair pair-object))
+    (pair-object-cdr pair))
+  (:method ((pair nil-object))
+    (maru-nil)))
 
 (defclass number-object (single-value-object)
   ())
@@ -495,27 +507,25 @@
 (defun mk-form (fn)
   (make-instance 'form-object :function fn))
 
-(defmethod eq-object ((lhs basic-object) (rhs (eql nil)))
-  nil)
-
-(defmethod eq-object ((lhs (eql nil)) (rhs basic-object))
-  nil)
-
-(defmethod eq-object ((lhs (eql nil)) (rhs (eql nil)))
-  t)
-
-(defmethod eq-object ((lhs single-value-object) (rhs single-value-object))
-  (equal (object-value lhs) (object-value rhs)))
-
-(defmethod eq-object ((lhs list-object) (rhs list-object))
-  (eq-tree (list-object-elements lhs) (list-object-elements rhs)
-           :test #'eq-object))
-
-(defmethod maru-nil? ((object list-object))
-  (eq-object object (mk-list)))
+(defgeneric eq-object (lhs rhs)
+  (:method ((lhs single-value-object) (rhs single-value-object))
+    (equal (object-value lhs) (object-value rhs)))
+  (:method ((lhs pair-object) (rhs pair-object))
+    (and (eq-object (pair-object-car lhs) (pair-object-car rhs))
+         (eq-object (pair-object-cdr lhs) (pair-object-cdr rhs))))
+  ;; we don't want to do the pair comparison if the second argument
+  ;; is a nil
+  (:method ((lhs pair-object) (rhs nil-object))
+    nil)
+  (:method ((lhs nil-object) (rhs nil-object))
+    t)
+  (:method ((lhs nil-object) (rhs basic-object))
+    nil)
+  (:method ((lhs basic-object) (rhs nil-object))
+    nil))
 
 (defmethod maru-nil? ((object basic-object))
-  nil)
+  (eq-object object (maru-nil)))
 
 ;;; sexpr : should be a (possibly nested) list of string literals
 (defun untype-everything (sexpr)
@@ -1110,7 +1120,7 @@
                     (funcall (function-object-fn
                                 (maru-lookup ctx (maru-intern ctx "if")))
                              ctx
-                             (mk-list)                  ;; predicate
+                             (maru-nil)                 ;; predicate
                              (mk-number "12")           ;; then
                              (mk-number "14"))))))      ;; else
 
@@ -1149,7 +1159,7 @@
                                (maru-lookup ctx (mk-symbol "and")))
                              ctx
                              (mk-string "first") (mk-string "second")
-                             (mk-string "third") (mk-list))))))
+                             (mk-string "third") (maru-nil))))))
 
 (deftest test-maru-eval-with-form
   (let* ((ctx (maru-initialize))
@@ -1262,6 +1272,33 @@
                  :test #'eq-object)
          (binding-exists? child-ctx "that"))))
 
+(deftest test-maru-nil
+       ;; empty list is equivalent to nil
+  (and (eq-object (maru-nil) (maru-nil))
+       (eq-object (mk-list) (maru-nil))
+       (eq-object (maru-nil) (mk-list))
+       (eq-object (mk-list) (mk-list))
+       ;; a pair with two nils is not nil
+       (not (eq-object (mk-pair (maru-nil) (maru-nil))
+                       (maru-nil)))
+       (not (eq-object (maru-nil)
+                       (mk-pair (maru-nil) (maru-nil))))
+       ;; a pair with two nils is a list with a single nil
+       (eq-object (mk-pair (maru-nil) (maru-nil))
+                  (mk-list (maru-nil)))
+       (eq-object (mk-list (maru-nil))
+                  (mk-pair (maru-nil) (maru-nil)))
+       ;; a list with a single nil is not nil
+       (not (eq-object (mk-list (maru-nil))
+                       (maru-nil)))
+       (not (eq-object (maru-nil)
+                       (mk-list (maru-nil))))
+       ;; a cons with a cdr nil is a list
+       (eq-object (mk-list (mk-string "yes"))
+                  (mk-pair (mk-string "yes") (maru-nil)))
+       (eq-object (mk-pair (mk-string "yes") (maru-nil))
+                  (mk-list (mk-string "yes")))))
+
 (deftest test-maru-list
   (let ((list-object (mk-list (mk-number "1") (mk-string "yes")
                               (mk-string "goat"))))
@@ -1269,4 +1306,27 @@
          (eq-object (mk-string "yes") (maru-car (maru-cdr list-object)))
          (eq-object (mk-list (mk-string "yes") (mk-string "goat"))
                     (maru-cdr list-object)))))
+
+(deftest test-maru-pair-primitives
+  (let* ((ctx (maru-initialize))
+         (pair (funcall (function-object-fn
+                          (maru-lookup ctx (mk-symbol "cons")))
+                        ctx
+                        (mk-string "uno")
+                        (maru-primitive-cons ctx
+                            (mk-string "dos")
+                            (mk-list (mk-string "tres")))))
+         (test (mk-list (mk-string "uno") (mk-string "dos")
+                        (mk-string "tres"))))
+    (and (eq-object pair test)
+         (eq-object (funcall (function-object-fn
+                               (maru-lookup ctx (mk-symbol "car")))
+                               ctx
+                               test)
+                    (maru-car test))
+         (eq-object (funcall (function-object-fn
+                               (maru-lookup ctx (mk-symbol "cdr")))
+                               ctx
+                               test)
+                    (maru-cdr test)))))
 
