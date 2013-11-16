@@ -278,8 +278,12 @@
                      (mk-expr #'maru-primitive-cons))
     (maru-define ctx (maru-intern ctx "car")
                      (mk-expr #'maru-primitive-car))
+    (maru-define ctx (maru-intern ctx "set-car")
+                     (mk-expr #'maru-primitive-set-car))
     (maru-define ctx (maru-intern ctx "cdr")
                      (mk-expr #'maru-primitive-cdr))
+    (maru-define ctx (maru-intern ctx "set-cdr")
+                     (mk-expr #'maru-primitive-set-cdr))
     (maru-define ctx (maru-intern ctx "and")
                      (mk-fixed #'maru-primitive-and))
     (maru-define ctx (maru-intern ctx "define")
@@ -344,10 +348,22 @@
   (maru-car (car args)))
 
 ; expr
+(defun maru-primitive-set-car (ctx &rest args)
+  (declare (ignore ctx))
+  (assert (= 2 (length args)))
+  (setf (pair-object-car (car args)) (cadr args)))
+
+; expr
 (defun maru-primitive-cdr (ctx &rest args)
   (declare (ignore ctx))
   (assert (and (= 1 (length args)) (typep (car args) 'pair-object)))
   (maru-cdr (car args)))
+
+; expr
+(defun maru-primitive-set-cdr (ctx &rest args)
+  (declare (ignore ctx))
+  (assert (= 2 (length args)))
+  (setf (pair-object-cdr (car args)) (cadr args)))
 
 ; fixed
 (defun maru-primitive-and (ctx &rest args)
@@ -1334,4 +1350,32 @@
                                ctx
                                test)
                     (maru-cdr test)))))
+
+(deftest test-maru-mutating-pair-primitives
+  (let* ((ctx (maru-initialize))
+         (list (mk-pair (mk-string "cyber")
+                        (mk-pair (mk-string "space")
+                                 (mk-pair (mk-number "12")
+                                          (mk-number "15")))))
+         (src0 "(define list (cons \"cyber\" (cons \"space\"
+                                                   (cons 12 15))))")
+         (src1 "(set-car list 100)")
+         (src2 "(set-cdr list 250)")
+         (car-list "(car list)")
+         (cdr-list "(cdr list)"))
+    (maru-all-transforms ctx src0)
+    ; does car mutation work?
+    (maru-all-transforms ctx src1)
+    (and (eq-object (mk-number "100")
+                    (maru-all-transforms ctx car-list))
+         (eq-object (maru-cdr list)
+                    (maru-all-transforms ctx cdr-list))
+         ; does cdr mutation work
+         (progn
+           (maru-all-transforms ctx src2)
+           t)
+         (eq-object (mk-number "100")
+                    (maru-all-transforms ctx car-list))
+         (eq-object (mk-number "250")
+                    (maru-all-transforms ctx cdr-list)))))
 
