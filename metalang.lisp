@@ -290,7 +290,7 @@
     (maru-define ctx (maru-intern ctx "and")
                      (mk-fixed #'maru-primitive-and))
     (maru-define ctx (maru-intern ctx "define")
-                     (mk-form #'maru-primitive-define))
+                     (mk-fixed #'maru-primitive-define))
     (maru-define ctx (maru-intern ctx "block")
                      (mk-expr #'maru-primitive-block))
     (maru-define ctx (maru-intern ctx "lambda")
@@ -381,9 +381,14 @@
 
 ; form
 (defun maru-primitive-define (ctx &rest args)
-  (let ((eval-transformer (make-transformer :name 'eval)))
-    (cdr (maru-define ctx (car args) (transform eval-transformer
-                                                (cadr args) ctx)))))
+  (let ((eval-transformer (make-transformer :name 'eval))
+        (expand-transformer (make-transformer :name 'expand)))
+    (cdr (maru-define ctx (car args)
+                          (transform eval-transformer
+                                     (transform expand-transformer
+                                                (cadr args) ctx)
+                                     ctx)))))
+
 ; expr
 (defun maru-primitive-block (ctx &rest args)
   (declare (ignore ctx))
@@ -617,7 +622,7 @@
                            (transformer-name (eql 'eval))
                            (whatami (eql 'arg)))
   (cond ((applicator-from-internal (type-of object))
-         (error "args shouldn't get messages when there is an applicator"))
+         (error "args shouldn't get messages if there is an applicator"))
         (t (assert (next-method-p)) (call-next-method))))
 
 (defmethod inform ((object basic-object)
@@ -655,8 +660,7 @@
   (let ((binding (maru-lookup *ctx* object)))
     (if binding
         `(nil . ,binding)
-        (error (format nil "arg '~A' is undefined"
-                           (object-value object))))))
+        `(nil . ,object))))
 
 (defmethod inform ((object symbol-object)
                    (transformer-name (eql 'eval))
@@ -754,6 +758,11 @@
 ;;;  maru expansion transformer
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+;;; if we are forwarded too from some symbol and we don't have anything
+;;; to do during expansion; then we need to evaluate to the symbol not
+;;; our value (the binding)
+(defparameter *forwarding-symbol* nil)
+
 ;;;;;;;;;; basic object ;;;;;;;;;;
 ;;; > FIXME: should use *expanders*
 
@@ -762,7 +771,10 @@
 (defmethod inform ((object basic-object)
                    (transformer-name (eql 'expand))
                    (whatami (eql 'arg)))
-  `(nil . ,object))
+  (declare (special *forwarding-symbol*))
+  (if *forwarding-symbol*
+      `(nil . ,*forwarding-symbol*)
+      `(nil . ,object)))
 
 (defmethod inform ((object basic-object)
                    (transformer-name (eql 'expand))
@@ -772,7 +784,10 @@
 (defmethod pass ((object basic-object)
                  (trasformer-name (eql 'expand))
                  (args list))
-  `(nil . ,(cons object args)))
+  (declare (special *forwarding-symbol*))
+  (if *forwarding-symbol*
+      `(nil . ,(cons *forwarding-symbol* args))
+      `(nil . ,(cons object args))))
 
 
 ;;;;;;;;;; symbol object ;;;;;;;;;;
@@ -780,31 +795,42 @@
 (defmethod inform ((object symbol-object)
                    (transformer-name (eql 'expand))
                    (whatami (eql 'arg)))
-  (declare (special *ctx*))
+  (declare (special *ctx* *forwarding-symbol*))
+  (when *forwarding-symbol*
+    (return-from inform `(nil . ,*forwarding-symbol*)))
   (let ((binding (maru-lookup *ctx* object)))
     (if binding
-        `(nil . ,binding)
-        (error (format nil "arg '~A' is undefined"
-                           (object-value object))))))
+        (let ((*forwarding-symbol* object))
+          (declare (special *forwarding-symbol*))
+          (inform binding 'expand 'arg))
+        `(nil . ,object))))
 
 (defmethod inform ((object symbol-object)
                    (transformer-name (eql 'expand))
                    (whatami (eql 'lead)))
-  (declare (special *ctx*))
+  (declare (special *ctx* *forwarding-symbol*))
+  (when *forwarding-symbol*
+    (return-from inform t))
   (let ((binding (maru-lookup *ctx* object)))
     (if binding
-        (inform binding 'expand 'lead)
+        (let ((*forwarding-symbol* object))
+          (declare (special *forwarding-symbol*))
+          (inform binding 'expand 'lead))
         t)))
 
 ;;; OF-NOTE: forwarding
 (defmethod pass ((object symbol-object)
                  (transformer-name (eql 'expand))
                  (args list))
-  (declare (special *ctx*))
+  (declare (special *ctx* *forwarding-symbol*))
+  (when *forwarding-symbol*
+    (return-from pass `(nil . ,(cons *forwarding-symbol* args))))
   (let ((binding (maru-lookup *ctx* object)))
     (if binding
-        (pass binding 'expand args)   ; must forward to actual form
-        (error (format nil "'~A' is undefined" (object-value object))))))
+        (let ((*forwarding-symbol* object))
+          (declare (special *forwarding-symbol*))
+          (pass binding 'expand args))  ; must forward to actual form
+        `(nil . ,(cons object args)))))
 
 
 ;;;;;;;;;; form object ;;;;;;;;;;
@@ -1225,6 +1251,7 @@
     (and (eq-object (maru-car evaled-expr) (mk-string "hello"))
          (eq-object (maru-cdr evaled-expr) (mk-string "world")))))
 
+;; no longer an expand bug as define is no longer a macro
 (deftest test-maru-expand-bug
   (let* ((ctx (maru-initialize))
          (evaled-expr
@@ -1233,9 +1260,20 @@
     (and (eq-object evaled-expr (mk-pair (mk-number "3")
                                          (mk-number "4"))))))
 
+;; no longer an expand bug as define is no longer a macro
+(deftest test-maru-expand-bug-2
+  "macros in the lambda body should be expanded"
+  (let* ((ctx (maru-initialize))
+         (evaled-expr
+           (maru-all-transforms ctx
+                                "(block
+                                   (define fn (lambda (a) (define a 3)))
+                                   (fn 5))")))
+    (and (eq-object (mk-number "3") evaled-expr))))
+
 (deftest test-maru-primitive-define
   (let* ((ctx (maru-initialize))
-         (expand-transformer (make-transformer :name 'expand))
+         (expand-transformer (make-transformer :name 'eval))
          (typed-expr (type-expr ctx "(define a \"some-value\")"))
          (def-sym (mk-symbol "define"))
          (a-sym (mk-symbol "a"))
@@ -1341,7 +1379,17 @@
 (deftest test-binding-precedence
   ~"inner bindings should take precedence over outer bindings"
   ~" with the same name"
-  nil)
+  (let* ((ctx (maru-initialize))
+         (src0 "(block
+                  (define a (cons 1 3))
+                  (define fn (lambda (a)
+                               (define a 20)
+                               a))
+                  (fn a))")
+         (a "(cons (car a) (cdr a))"))
+    (and (eq-object (mk-number "20") (maru-all-transforms ctx src0))
+         (eq-object (mk-pair (mk-number "1") (mk-number "3"))
+                    (maru-all-transforms ctx a)))))
 
 (deftest test-maru-spawn-child-env
   (let ((ctx (maru-initialize))
