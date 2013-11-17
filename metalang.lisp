@@ -110,7 +110,10 @@
           (t (list "unquote" (tokenize next-char-fn read-table))))))
 
 (defun quote-handler (next-char-fn read-table)
-  (list "quote" (tokenize next-char-fn read-table)))
+  (let ((quoted (tokenize next-char-fn read-table)))
+    (if (listp quoted)
+        (cons "quote-list" quoted)
+        (list "quote-atom" quoted))))
 
 (defun read-macro? (c read-table)
   (assoc c read-table :test #'char=))
@@ -281,6 +284,10 @@
 (defun maru-initialize ()
   (let ((ctx (maru-mk-ctx)))
     ;; primitives
+    (maru-define ctx (maru-intern ctx "quote-list")
+                     (mk-expr #'maru-primitive-quote-list))
+    (maru-define ctx (maru-intern ctx "quote-atom")
+                     (mk-expr #'maru-primitive-quote-atom))
     (maru-define ctx (maru-intern ctx "if")
                      (mk-fixed #'maru-primitive-if))
     (maru-intern ctx "t")
@@ -294,6 +301,8 @@
                      (mk-expr #'maru-primitive-cdr))
     (maru-define ctx (maru-intern ctx "set-cdr")
                      (mk-expr #'maru-primitive-set-cdr))
+    (maru-define ctx (maru-intern ctx "caar")
+                     (mk-expr #'maru-primitive-caar))
     (maru-define ctx (maru-intern ctx "and")
                      (mk-fixed #'maru-primitive-and))
     (maru-define ctx (maru-intern ctx "define")
@@ -355,6 +364,19 @@
 ;;;      maru primitives
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+;; FIXME: What is the right way to handle quote?
+; expr
+(defun maru-primitive-quote-list (ctx &rest args)
+  (declare (ignore ctx))
+  (assert (= 1 (length args)))
+  (apply #'mk-list (car args)))
+
+; expr
+(defun maru-primitive-quote-atom (ctx &rest args)
+  (declare (ignore ctx))
+  (assert (= 1 (length args)))
+  (car args))
+
 ; fixed
 (defun maru-primitive-if (ctx &rest args)
   (let ((test (car args))
@@ -396,6 +418,12 @@
   (declare (ignore ctx))
   (assert (= 2 (length args)))
   (setf (pair-object-cdr (car args)) (cadr args)))
+
+; expr
+(defun maru-primitive-caar (ctx &rest args)
+  (declare (ignore ctx))
+  (assert (= 1 (length args)))
+  (maru-car (maru-car (car args))))
 
 ; fixed
 (defun maru-primitive-and (ctx &rest args)
@@ -515,6 +543,7 @@
 (defun maru-primitive-pair? (ctx &rest args)
   (declare (ignore ctx))
   (mk-bool (typep (car args) 'pair-object)))
+
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;  maru type transformer
@@ -667,26 +696,28 @@
 (defun untype-everything (sexpr)
   (tree-map #'(lambda (string) (mk-untyped string)) sexpr))
 
-(defmethod inform ((object untyped-object)
-                   (transformer-name (eql 'type))
-                   (whatami (eql 'arg)))
-  (declare (special *ctx*))
+(defun type-it (ctx object)
   (let* ((val (object-value object))
          (len (length val))
          (first-char (char val 0)))
     (cond ((char= #\" first-char)                   ; string
-           (cons nil (mk-string (subseq val 1 (1- len)))))
-          ((alpha-char-p first-char) (cons nil (maru-intern *ctx* val)))
+           (mk-string (subseq val 1 (1- len))))
           ((digit-char-p first-char)
-           (cons nil
-                 (if (and (>= len 2) (char-equal #\x (char val 1)))
-                     (progn
-                       (assert (> len 2))
-                       (mk-number (subseq val 2 len) :hex t))
-                     (mk-number val))))
+             (if (and (>= len 2) (char-equal #\x (char val 1)))
+               (progn
+                 (assert (> len 2))
+                 (mk-number (subseq val 2 len) :hex t))
+               (mk-number val)))
           ((char= #\? first-char)
-           (cons nil (mk-char (char val 1))))
+           (mk-char (char val 1)))
+          ((graphic-char-p first-char) (maru-intern ctx val))
           (t (error "unsure how to do type conversion")))))
+
+(defmethod inform ((object untyped-object)
+                   (transformer-name (eql 'type))
+                   (whatami (eql 'arg)))
+  (declare (special *ctx*))
+  `(nil . ,(type-it *ctx* object)))
 
 (defmethod inform ((object untyped-object)
                    (transformer-name (eql 'type))
@@ -697,8 +728,7 @@
                  (transformer-name (eql 'type))
                  (args list))
   (declare (special *ctx*))
-  (cons nil (append (list (maru-intern *ctx* (object-value object)))
-                    args)))
+  `(nil . ,(cons (type-it *ctx* object) args)))
 
 
 ;;;;;;;;;; list as lead ;;;;;;;;;;
@@ -1127,7 +1157,7 @@
     ;; consume the quote
     (funcall next-char-fn)
     (equal (quote-handler next-char-fn nil)
-           '("quote" "this"))))
+           '("quote-atom" "this"))))
 
 (deftest test-desugar
   (let ((next-char-fn
@@ -1142,7 +1172,8 @@
           (next-char-factory "(123 ''and '(a b c))"))
         (read-table '((#\' . quote-handler))))
     (equal (tokenize next-char-fn read-table)
-           '("123" ("quote" ("quote" "and")) ("quote" ("a" "b" "c"))))))
+           '("123" ("quote-list" "quote-atom" "and")
+                   ("quote-list" "a" "b" "c")))))
 
 (deftest test-next-char-factory-peek-bug
   (let ((next-char-fn
@@ -1341,9 +1372,9 @@
                              (mk-number "14"))))))      ;; else
 
 (defun untype-expr (src)
-  (untype-everything
-    (tokenize
-      (next-char-factory src))))
+  (let ((read-table '((#\' . quote-handler) (#\, . unquote-handler))))
+    (untype-everything
+      (tokenize (next-char-factory src) read-table))))
 
 (defun type-expr (ctx src)
   (transform (make-transformer :name 'type) (untype-expr src) ctx))
@@ -1744,4 +1775,32 @@
                   (cons (pair? n) (pair? p)))"))
     (eq-object (mk-pair (mk-bool nil) (mk-bool t))
                (maru-all-transforms ctx src0))))
+
+(deftest test-maru-assq
+  (let ((ctx (maru-initialize))
+        (code "(define assq
+                 (lambda (object list)
+                   (let ((result ()))
+                     (while (pair? list)
+                       (if (= object (caar list))
+                           (let ()
+                             (set result (car list))
+                             (set list ())))
+                           (set list (cdr list)))
+                         result)))")
+        (use-it "(block
+                   (define alist '((3 33) (4 44) (5 55)))
+                   (cons (assq 4 alist) (assq \"12\" alist)))"))
+    nil))
+#|
+    (maru-all-transforms ctx use-it)))
+    (maru-all-transforms ctx code)
+    (eq-object (mk-pair (mk-number "44") (maru-nil))
+               (maru-all-transforms ctx use-it))))
+|#
+
+(deftest test-type-quoted-list
+  (let ((ctx (maru-initialize))
+        (src "(define a '(1 (2 3)))"))
+    (type-expr ctx src)))
 
