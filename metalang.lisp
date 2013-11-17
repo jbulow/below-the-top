@@ -1263,6 +1263,19 @@
     (eq-tree (transform type-transformer untyped-expr ctx) typed-expr
              :test #'eq-object)))
 
+(deftest test-type-quoted-list
+  (let ((ctx (maru-initialize))
+        (src "(define a '(1 (2 3)))")
+        (typed-expr
+          (list (mk-symbol "define") (mk-symbol "a")
+                (list (mk-symbol "quote")
+                      (list
+                        (mk-number "1")
+                        (list (mk-number "2")
+                              (mk-number "3")))))))
+    (eq-tree (type-expr ctx src) typed-expr
+             :test #'eq-object)))
+
 (deftest test-maru-intern
   (let* ((ctx (maru-mk-ctx))
          (out-sym (mk-symbol "hello-world"))
@@ -1890,11 +1903,6 @@
                         (maru-nil))
                (maru-all-transforms ctx use-it))))
 
-(deftest test-type-quoted-list
-  (let ((ctx (maru-initialize))
-        (src "(define a '(1 (2 3)))"))
-    (type-expr ctx src)))
-
 (deftest test-maru-list-primitive
   (let ((ctx (maru-initialize))
         (src "(list 1 2 (list \"three\" (list 4)) \"five\")"))
@@ -1902,5 +1910,13 @@
                         (mk-list (mk-string "three")
                                  (mk-list (mk-number "4")))
                         (mk-string "five"))
+               (maru-all-transforms ctx src))))
+
+(deftest test-maru-doesnt-require-quote-nil
+  ~"because ian maru reads itself into maru list type it doesn't need"
+  ~" to quote the empty list, we should match this"
+  (let ((ctx (maru-initialize))
+        (src "(= () '())"))
+    (eq-object (mk-bool t)
                (maru-all-transforms ctx src))))
 
