@@ -316,6 +316,8 @@
                      (mk-expr #'maru-primitive-div))
     (maru-define ctx (maru-intern ctx "=")
                      (mk-expr #'maru-primitive-eq))
+    (maru-define ctx (maru-intern ctx "!=")
+                     (mk-expr #'maru-primitive-neq))
     (maru-define ctx (maru-intern ctx "<")
                      (mk-expr #'maru-primitive-lt))
     (maru-define ctx (maru-intern ctx "<=")
@@ -473,6 +475,11 @@
 (defun maru-primitive-eq (ctx &rest args)
   (declare (ignore ctx))
   (maru-boolean-cmp (car args) (cadr args) #'=))
+
+; expr
+(defun maru-primitive-neq (ctx &rest args)
+  (declare (ignore ctx))
+  (maru-boolean-cmp (car args) (cadr args) #'/=))
 
 ; expr
 (defun maru-primitive-lt (ctx &rest args)
@@ -1428,12 +1435,15 @@
                        (cons (> a 4)
                              (cons (= a \"this\")
                                    (cons (>= a 4)
-                                         (<= a 4))))))"))
+                                         (cons (<= a 4)
+                                               (!= a 55)))))))"))
     (eq-object (mk-pair (mk-bool t)
                         (mk-pair (mk-bool nil)
                                  (mk-pair (mk-bool nil)
                                           (mk-pair (mk-bool t)
-                                                   (mk-bool t)))))
+                                                   (mk-pair
+                                                     (mk-bool t)
+                                                     (mk-bool t))))))
                (maru-all-transforms ctx src))))
 
 (deftest test-maru-primitive-lambda
