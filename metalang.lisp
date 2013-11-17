@@ -485,11 +485,12 @@
         (eval-transformer (make-transformer :name 'eval)))
     (setf child-ctx (maru-spawn-child-env ctx))
     (dolist (arg-param (car args))
-      (maru-define child-ctx (car arg-param)
-                             (transform eval-transformer
-                                        (cons (mk-symbol "block")
-                                              (cdr arg-param))
-                                        ctx)))
+      (maru-define-new-binding
+        child-ctx (car arg-param)
+                  (transform eval-transformer
+                             (cons (mk-symbol "block")
+                                   (cdr arg-param))
+                             ctx)))
     (transform eval-transformer
                (cons (mk-symbol "block") (cdr args))
                child-ctx)))
@@ -1640,6 +1641,17 @@
     (and (eq-object (mk-number "20") (maru-all-transforms ctx src0))
          (eq-object (mk-pair (mk-number "1") (mk-number "3"))
                     (maru-all-transforms ctx a)))))
+
+(deftest test-let-create-new-bindings-bug
+  "let and lambda should always create new bindings"
+  (let* ((ctx (maru-initialize))
+         (src "(block
+                 (define a 30)
+                 (let ((a 15))
+                   100)
+                 a)"))
+    (eq-object (mk-number "30")
+               (maru-all-transforms ctx src))))
 
 (deftest test-maru-spawn-child-env
   (let ((ctx (maru-initialize))
