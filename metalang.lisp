@@ -266,6 +266,13 @@
                      (t (l-up (maru-env-parent env)))))))
     (l-up (maru-context-env ctx))))
 
+(defun maru-boolean-cmp (lhs rhs fn)
+  (when (not (and (typep lhs 'number-object) (typep rhs 'number-object)))
+    (return-from maru-boolean-cmp (mk-bool nil)))
+  (if (funcall fn (object-value lhs) (object-value rhs))
+      (mk-bool t)
+      (mk-bool nil)))
+
 ;;; > intern primitives and add their bindings to global env
 ;;; > add runtime compositioners
 ;;;     + *expanders*   : []
@@ -297,6 +304,8 @@
                      (mk-fixed #'maru-primitive-lambda))
     (maru-define ctx (maru-intern ctx "let")
                      (mk-fixed #'maru-primitive-let))
+    (maru-define ctx (maru-intern ctx "while")
+                     (mk-fixed #'maru-primitive-while))
     (maru-define ctx (maru-intern ctx "+")
                      (mk-expr #'maru-primitive-add))
     (maru-define ctx (maru-intern ctx "-")
@@ -305,6 +314,16 @@
                      (mk-expr #'maru-primitive-mul))
     (maru-define ctx (maru-intern ctx "/")
                      (mk-expr #'maru-primitive-div))
+    (maru-define ctx (maru-intern ctx "=")
+                     (mk-expr #'maru-primitive-eq))
+    (maru-define ctx (maru-intern ctx "<")
+                     (mk-expr #'maru-primitive-lt))
+    (maru-define ctx (maru-intern ctx "<=")
+                     (mk-expr #'maru-primitive-lte))
+    (maru-define ctx (maru-intern ctx ">")
+                     (mk-expr #'maru-primitive-gt))
+    (maru-define ctx (maru-intern ctx ">=")
+                     (mk-expr #'maru-primitive-gte))
     (maru-define ctx (maru-intern ctx "set")
                      (mk-form #'maru-primitive-set))
 
@@ -416,6 +435,16 @@
                (cons (mk-symbol "block") (cdr args))
                child-ctx)))
 
+; fixed
+(defun maru-primitive-while (ctx &rest args)
+  (let ((eval-transformer (make-transformer :name 'eval)))
+    ;; return nil same as boot-eval.c
+    (do ()
+        ((maru-nil? (transform eval-transformer (car args) ctx)) nil)
+      (transform eval-transformer
+                 (cons (mk-symbol "block") (cdr args))
+                 ctx))))
+
 ; expr
 (defun maru-primitive-add (ctx &rest args)
   (declare (ignore ctx))
@@ -439,6 +468,31 @@
   (declare (ignore ctx))
   (mk-number (to-string (floor (object-value (car args))
                                (object-value (cadr args))))))
+
+; expr
+(defun maru-primitive-eq (ctx &rest args)
+  (declare (ignore ctx))
+  (maru-boolean-cmp (car args) (cadr args) #'=))
+
+; expr
+(defun maru-primitive-lt (ctx &rest args)
+  (declare (ignore ctx))
+  (maru-boolean-cmp (car args) (cadr args) #'<))
+
+; expr
+(defun maru-primitive-lte (ctx &rest args)
+  (declare (ignore ctx))
+  (maru-boolean-cmp (car args) (cadr args) #'<=))
+
+; expr
+(defun maru-primitive-gt (ctx &rest args)
+  (declare (ignore ctx))
+  (maru-boolean-cmp (car args) (cadr args) #'>))
+
+; expr
+(defun maru-primitive-gte (ctx &rest args)
+  (declare (ignore ctx))
+  (maru-boolean-cmp (car args) (cadr args) #'>=))
 
 ; form
 (defun maru-primitive-set (ctx &rest args)
@@ -526,6 +580,12 @@
 (defun mk-char (value)
   (make-instance 'char-object :value value))
 
+(defclass bool-object (single-value-object)
+  ())
+
+(defun mk-bool (value)
+  (make-instance 'bool-object :value value))
+
 (defclass array-object (basic-object)
   ((elements :accessor array-object-elements
              :initarg  :elements)))
@@ -579,7 +639,12 @@
   (:method ((lhs nil-object) (rhs basic-object))
     nil)
   (:method ((lhs basic-object) (rhs nil-object))
-    nil))
+    nil)
+  ;; nil is false
+  (:method ((lhs nil-object) (rhs bool-object))
+    (null (object-value rhs)))
+  (:method ((lhs bool-object) (rhs nil-object))
+    (null (object-value lhs))))
 
 (defmethod maru-nil? ((object basic-object))
   (eq-object object (maru-nil)))
@@ -1355,6 +1420,22 @@
          (binding-exists? ctx "*") (binding-exists? ctx "/")
          (eq-object result (mk-number "21")))))
 
+(deftest test-maru-primitive-ordering
+  (let* ((ctx (maru-initialize))
+         (src "(block
+                 (define a 4)
+                 (cons (< a 5)
+                       (cons (> a 4)
+                             (cons (= a \"this\")
+                                   (cons (>= a 4)
+                                         (<= a 4))))))"))
+    (eq-object (mk-pair (mk-bool t)
+                        (mk-pair (mk-bool nil)
+                                 (mk-pair (mk-bool nil)
+                                          (mk-pair (mk-bool t)
+                                                   (mk-bool t)))))
+               (maru-all-transforms ctx src))))
+
 (deftest test-maru-primitive-lambda
   (let* ((ctx (maru-initialize))
          (src "(define fn (lambda (a b) (* a (+ 2 b))))")
@@ -1620,5 +1701,21 @@
                                  (+ (+ a b) c))))
                   (fn 5 7))"))
     (eq-object (mk-number "57")
+               (maru-all-transforms ctx src0))))
+
+(deftest test-maru-while-primitive
+  (let* ((ctx (maru-initialize))
+         (src0 "(block
+                  (define i 0)
+                  (define out (cons 10 10))
+                  (while (< i 3)
+                    (set out (cons i out))
+                    (set i (+ i 1)))
+                  out)"))
+    (eq-object (mk-pair (mk-number "2")
+                        (mk-pair (mk-number "1")
+                                 (mk-pair (mk-number "0")
+                                          (mk-pair (mk-number "10")
+                                                   (mk-number "10")))))
                (maru-all-transforms ctx src0))))
 
