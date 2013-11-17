@@ -295,6 +295,8 @@
                      (mk-expr #'maru-primitive-block))
     (maru-define ctx (maru-intern ctx "lambda")
                      (mk-fixed #'maru-primitive-lambda))
+    (maru-define ctx (maru-intern ctx "let")
+                     (mk-fixed #'maru-primitive-let))
     (maru-define ctx (maru-intern ctx "+")
                      (mk-expr #'maru-primitive-add))
     (maru-define ctx (maru-intern ctx "-")
@@ -402,6 +404,17 @@
 (defun maru-primitive-lambda (ctx &rest args)
   (mk-closure ctx (list (car args)
                         (cons (mk-symbol "block") (cdr args)))))
+
+; fixed
+(defun maru-primitive-let (ctx &rest args)
+  (let ((child-ctx nil)
+        (eval-transformer (make-transformer :name 'eval)))
+    (setf child-ctx (maru-spawn-child-env ctx))
+    (dolist (arg-param (car args))
+      (maru-define child-ctx (car arg-param) (cadr arg-param)))
+    (transform eval-transformer
+               (cons (mk-symbol "block") (cdr args))
+               child-ctx)))
 
 ; expr
 (defun maru-primitive-add (ctx &rest args)
@@ -608,6 +621,27 @@
   (cons nil (append (list (maru-intern *ctx* (object-value object)))
                     args)))
 
+
+;;;;;;;;;; list as lead ;;;;;;;;;;
+
+(defmethod inform ((list list)
+                   (transformer-name (eql 'expand))
+                   (whatami (eql 'arg)))
+  (error "should never be dispatched on list argument!"))
+
+(defmethod inform ((list list)
+                   (transformer-name (eql 'type))
+                   (whatami (eql 'lead)))
+  t)
+
+(defmethod pass ((list list)
+                 (transformer-name (eql 'type))
+                 (args list))
+  (declare (special *ctx*))
+  (let ((type-transformer (make-transformer :name 'type)))
+    `(nil . ,(cons (transform type-transformer list *ctx*) args))))
+
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;  maru evalutator transformer
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -756,9 +790,6 @@
                             args))
       (maru-define child-ctx (car arg-param) (cadr arg-param)))
     ;; apply the function in the lexical env
-    ;; FIXME: the (cadr (runtime-closure-object-src object)) is the
-    ;;        first expression after the arglist; may want to make this
-    ;;        an implicit block.
     `(nil . ,(transform eval-transformer
                         (cadr (runtime-closure-object-src object))
                         child-ctx))))
@@ -861,6 +892,27 @@
   (declare (special *ctx*))
   (let ((fn (function-object-fn object)))
     `(nil . ,(apply fn *ctx* args))))
+
+
+;;;;;;;;;; list as lead ;;;;;;;;;;
+
+(defmethod inform ((list list)
+                   (transformer-name (eql 'expand))
+                   (whatami (eql 'arg)))
+  (error "should never be dispatched on list argument!"))
+
+;; FIXME: do the right thing
+(defmethod inform ((list list)
+                   (transformer-name (eql 'expand))
+                   (whatami (eql 'lead)))
+  t)
+
+;; FIXME: do the right thing
+(defmethod pass ((list list)
+                 (transformer-name (eql 'expand))
+                 (args list))
+  (declare (special *ctx*))
+  (cons nil (cons list args)))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -1557,5 +1609,16 @@
                   (set yesterday 34)
                   yesterday)"))
     (eq-object (mk-number "34")
+               (maru-all-transforms ctx src0))))
+
+(deftest test-maru-let-primitive
+  (let* ((ctx (maru-initialize))
+         (src0 "(block
+                  (define fn (lambda (a b)
+                               (let ((a 20)
+                                     (c 30))
+                                 (+ (+ a b) c))))
+                  (fn 5 7))"))
+    (eq-object (mk-number "57")
                (maru-all-transforms ctx src0))))
 
