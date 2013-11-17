@@ -328,6 +328,8 @@
                      (mk-expr #'maru-primitive-gte))
     (maru-define ctx (maru-intern ctx "set")
                      (mk-form #'maru-primitive-set))
+    (maru-define ctx (maru-intern ctx "pair?")
+                     (mk-expr #'maru-primitive-pair?))
 
     ;; compositioners
     (maru-define ctx (maru-intern ctx "*expanders*") (mk-array 32))
@@ -508,6 +510,11 @@
                (cons (cadar args) (cdr args))))
         (t (maru-lookup ctx (car args))
            (cons (mk-symbol "define") args))))
+
+; expr
+(defun maru-primitive-pair? (ctx &rest args)
+  (declare (ignore ctx))
+  (mk-bool (typep (car args) 'pair-object)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;  maru type transformer
@@ -1727,5 +1734,14 @@
                                  (mk-pair (mk-number "0")
                                           (mk-pair (mk-number "10")
                                                    (mk-number "10")))))
+               (maru-all-transforms ctx src0))))
+
+(deftest test-maru-pair?-primitive
+  (let* ((ctx (maru-initialize))
+         (src0 "(block
+                  (define n 10)
+                  (define p (cons 1 2))
+                  (cons (pair? n) (pair? p)))"))
+    (eq-object (mk-pair (mk-bool nil) (mk-bool t))
                (maru-all-transforms ctx src0))))
 
