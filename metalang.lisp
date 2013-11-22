@@ -229,11 +229,12 @@
 (defclass maru-env ()
   ((bindings :accessor maru-env-bindings
              :initarg  :bindings
-             :initform '())
-   (parent :accessor maru-env-parent
+             :initform (list (cons (mk-symbol "dummy")
+                                   (mk-symbol "dummyvalue"))))
+   (parent :accessor  maru-env-parent
            :initarg   :parent
            :initform  nil
-           :type maru-env)))
+           :type      maru-env)))
 
 (defstruct maru-context
   (env (make-instance 'maru-env))
@@ -246,33 +247,39 @@
                          :symbols (maru-context-symbols parent-ctx))
       (make-maru-context)))
 
+;; for testing
 (defun maru-parent-ctx (ctx)
   (let ((new-ctx (copy-structure ctx)))
     (setf (maru-context-env new-ctx)
           (maru-env-parent (maru-context-env ctx)))
     new-ctx))
 
+(defun maru-root-env (ctx)
+  (assert (typep ctx 'maru-context))
+  (labels ((do-work (env)
+             (let ((parent (maru-env-parent env)))
+               (cond ((null parent) env)
+                     (t (do-work parent))))))
+    (do-work (maru-context-env ctx))))
+
 (defun maru-intern (ctx text)
   (let ((symbol (mk-symbol text)))
     (car (prepend symbol (maru-context-symbols ctx)))))
 
+;;; always adds things to the root environment
 (defun maru-define (ctx symbol obj)
   (assert (typep symbol 'symbol-object))
-  (cond ((maru-lookup ctx symbol) (maru-redefine ctx symbol obj))
-        (t (maru-define-new-binding ctx symbol obj))))
+  ;; if the symbol hasn't been internd, we can't use it
+  (unless (member symbol (maru-context-symbols ctx) :test #'eq-object)
+    (error "``~A'' has not been internd" (object-value symbol)))
+  (let ((root-env (maru-root-env ctx)))
+    (car (prepend `(,symbol . ,obj) (maru-env-bindings root-env)))))
 
+;;; for defining non-root bindings (lambda + let)
 (defun maru-define-new-binding (ctx symbol obj)
   (assert (typep symbol 'symbol-object))
   (car (push (cons symbol obj)
              (maru-env-bindings (maru-context-env ctx)))))
-
-(defun maru-redefine (ctx symbol obj)
-  (assert (and (typep symbol 'symbol-object)
-               (maru-lookup ctx symbol)))
-  (warn-me (format nil "redefining symbol: ~A as ~A"
-                       (object-value symbol) obj))
-  (setf (cdr (maru-lookup-raw ctx symbol)) obj)
-  (maru-lookup-raw ctx symbol))
 
 (defun maru-lookup-raw (ctx symbol)
   (labels ((l-up (env)
@@ -295,6 +302,29 @@
   (when (not (and (typep lhs 'number-object) (typep rhs 'number-object)))
     (return-from maru-boolean-cmp (mk-bool nil)))
   (mk-bool (funcall fn (object-value lhs) (object-value rhs))))
+
+(defgeneric maru-printable-object (object)
+  (:method ((object untyped-object))
+    (scat "<untyped ``" (object-value object) "'' >"))
+  (:method ((object nil-object))
+    "<nil>")
+  (:method ((object single-value-object))
+    (object-value object))
+  (:method ((object function-object))
+    "<generic-function-object>")
+  (:method ((object runtime-closure-object))
+    "<runtime-closure-object>")
+  (:method ((object form-object))
+    "<form-object>")
+  (:method ((object pair-object))
+    (scat "<pair-object ``"
+          (maru-printable-object (pair-object-car object))
+          "'' ``"
+          (maru-printable-object (pair-object-cdr object))
+          "''")))
+
+(defun maru-printable (sexpr)
+  (tree-map #'maru-printable-object sexpr))
 
 ;;; > intern primitives and add their bindings to global env
 ;;; > add runtime compositioners
@@ -356,6 +386,8 @@
                      (mk-expr #'maru-primitive-gte))
     (maru-define ctx (maru-intern ctx "set")
                      (mk-form #'maru-primitive-set))
+    (maru-define ctx (maru-intern ctx "seth")
+                     (mk-fixed #'maru-primitive-seth))
     (maru-define ctx (maru-intern ctx "pair?")
                      (mk-expr #'maru-primitive-pair?))
     ;; extension
@@ -370,6 +402,9 @@
                      (mk-expr #'maru-primitive-string-at))
     (maru-define ctx (maru-intern ctx "set-string-at")
                      (mk-expr #'maru-primitive-set-string-at))
+
+    (maru-define ctx (maru-intern ctx "form")
+                     (mk-expr #'maru-primitive-form))
 
     ;; compositioners
     (maru-define ctx (maru-intern ctx "*expanders*") (mk-array 32))
@@ -469,13 +504,12 @@
         (return out)))))
 
 ; form
+; FIXME: Should we be expanding here?
 (defun maru-primitive-define (ctx &rest args)
-  (let ((eval-transformer (make-transformer :name 'eval))
-        (expand-transformer (make-transformer :name 'expand)))
+  (let ((eval-transformer (make-transformer :name 'eval)))
     (cdr (maru-define ctx (car args)
                           (transform eval-transformer
-                                     (transform expand-transformer
-                                                (cadr args) ctx)
+                                     (cadr args)
                                      ctx)))))
 
 ; expr
@@ -572,11 +606,21 @@
 
 ; form
 (defun maru-primitive-set (ctx &rest args)
+  (declare (ignore ctx))
   (cond ((listp (car args))
          (cons (mk-symbol (scat "set-" (object-value (caar args))))
                (cons (cadar args) (cdr args))))
-        (t (maru-lookup ctx (car args))
-           (cons (mk-symbol "define") args))))
+        (t `(,(mk-symbol "seth") ,@args))))
+
+; fixed
+; FIXME: make sure the symbol is actually internd
+(defun maru-primitive-seth (ctx &rest args)
+  (assert (= 2 (length args)))
+  (let ((binding (maru-lookup-raw ctx (car args)))
+        (eval-transformer (make-transformer :name 'eval)))
+    (when (null binding)
+      (error "``~a'' is undefined thus can not be set" (car args)))
+    (setf (cdr binding) (transform eval-transformer (cadr args) ctx))))
 
 ; expr
 (defun maru-primitive-pair? (ctx &rest args)
@@ -624,6 +668,12 @@
         (car args))
       (maru-nil))))
 
+; expr
+(defun maru-primitive-form (ctx &rest args)
+  (declare (ignore ctx))
+  (assert (and (= 1 (length args)) (typep (car args)
+                                          'runtime-closure-object)))
+  (mk-form (car args)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;  maru type transformer
@@ -991,9 +1041,9 @@
 (defmethod pass ((object runtime-closure-object)
                  (transformer-name (eql 'eval))
                  (args list))
+  (declare (special *ctx*))
   (let ((child-ctx nil)
         (eval-transformer (make-transformer :name 'eval)))
-    (declare (special *ctx*))
     ;; create lexical env
     (setf child-ctx (maru-spawn-child-env *ctx*))
     ;; add arguments/parameters to lexical env
@@ -1103,8 +1153,9 @@
                  (args list))
   (declare (special *ctx*))
   (let ((fn (function-object-fn object)))
-    `(nil . ,(apply fn *ctx* args))))
-
+    (typecase fn
+      (runtime-closure-object (pass fn 'eval args))
+      (function `(nil . ,(apply fn *ctx* args))))))
 
 ;;;;;;;;;; list as lead ;;;;;;;;;;
 
@@ -1366,7 +1417,8 @@
          (member out-sym (maru-context-symbols ctx) :test 'eq-object)
          ;; dummy symbol
          (= 2 (length (maru-context-symbols ctx)))
-         (= 0 (length (maru-env-bindings (maru-context-env ctx)))))))
+         ;; dummy binding
+         (= 1 (length (maru-env-bindings (maru-context-env ctx)))))))
 
 (deftest test-intern-symbols-when-typing
   (let ((type-transformer (make-transformer :name 'type))
@@ -1377,7 +1429,8 @@
         (ctx (maru-mk-ctx))
         (out nil))
     (setf out (transform type-transformer untyped-expr ctx))
-    (and (= 0 (length (maru-env-bindings (maru-context-env ctx))))
+         ;; dummy binding
+    (and (= 1 (length (maru-env-bindings (maru-context-env ctx))))
          (null (maru-env-parent (maru-context-env ctx)))
          ;; dummy symbol
          (= 5 (length (maru-context-symbols ctx)))
@@ -1405,7 +1458,8 @@
          (eq-object (cdr out) (cdr test-out))
          ;; dummy symbol
          (= 2 (length (maru-context-symbols ctx)))
-         (= 1 (length (maru-env-bindings (maru-context-env ctx)))))))
+         ;; dummy binding
+         (= 2 (length (maru-env-bindings (maru-context-env ctx)))))))
 
 (deftest test-maru-lookup
   (let* ((ctx (maru-mk-ctx :parent-ctx (maru-mk-ctx)))
@@ -1417,16 +1471,21 @@
          (sym3 "in")
          (s3 nil)
          (doesntexist (maru-intern ctx "blahblah")))
+    ;; global scope
     (maru-define ctx (maru-intern ctx sym) obj)
+    ;; global scope
     (maru-define ctx (maru-intern ctx sym2) obj2)
 
     (setf s3 (maru-intern ctx sym3))
+    ;; global scope
     (maru-define (maru-parent-ctx ctx) s3 obj3)
 
     (and (eq-object obj (maru-lookup ctx (mk-symbol sym)))
-         (eq nil (maru-lookup (maru-parent-ctx ctx) (mk-symbol sym)))
+         (eq-object obj (maru-lookup (maru-parent-ctx ctx)
+                                     (mk-symbol sym)))
          (eq-object obj2 (maru-lookup ctx (mk-symbol sym2)))
-         (eq nil (maru-lookup (maru-parent-ctx ctx) (mk-symbol sym2)))
+         (eq-object obj2 (maru-lookup (maru-parent-ctx ctx)
+                                      (mk-symbol sym2)))
          (eq-object obj3 (maru-lookup ctx (mk-symbol sym3)))
          (eq-object obj3
                     (maru-lookup (maru-parent-ctx ctx) (mk-symbol sym3)))
@@ -1727,8 +1786,6 @@
   nil)
 
 (deftest test-binding-precedence
-  ~"inner bindings should take precedence over outer bindings"
-  ~" with the same name"
   (let* ((ctx (maru-initialize))
          (src0 "(block
                   (define a (cons 1 3))
@@ -1736,9 +1793,26 @@
                                (define a 20)
                                a))
                   (fn a))")
-         (a "(cons (car a) (cdr a))"))
-    (and (eq-object (mk-number "20") (maru-all-transforms ctx src0))
-         (eq-object (mk-pair (mk-number "1") (mk-number "3"))
+         (a "(block a)"))
+    ;; the define inside of the lambda only affects things outside of
+    ;; the lambda because define works at global scope
+    (and (eq-object (mk-pair (mk-number "1") (mk-number "3"))
+                    (maru-all-transforms ctx src0))
+         (eq-object (mk-number "20")
+                    (maru-all-transforms ctx a)))))
+
+(deftest test-binding-precedence-2
+  (let* ((ctx (maru-initialize))
+         (src0 "(block
+                  (define a (cons 1 3))
+                  (define fn (lambda (a)
+                               (set-car a 550)
+                               a))
+                  (fn a))")
+         (a "(block a)"))
+    (and (eq-object (mk-pair (mk-number "550") (mk-number "3"))
+                    (maru-all-transforms ctx src0))
+         (eq-object (mk-pair (mk-number "550") (mk-number "3"))
                     (maru-all-transforms ctx a)))))
 
 (deftest test-let-create-new-bindings-bug
@@ -1756,9 +1830,11 @@
   (let ((ctx (maru-initialize))
         (child-ctx nil))
     (maru-intern ctx "this")
+    ;; global
     (maru-define ctx (maru-intern ctx "that") (mk-number "15"))
     (setf child-ctx (maru-spawn-child-env ctx))
     (maru-intern child-ctx "or")
+    ;; global
     (maru-define child-ctx (maru-intern child-ctx "theother")
                            (mk-number "16"))
          ;; added stuff to parent env?
@@ -1766,9 +1842,8 @@
          (member (mk-symbol "this") (maru-context-symbols ctx)
                  :test #'eq-object)
          (binding-exists? ctx "that")
-         ;; didn't add stuff that was meant for child env
          (not (binding-exists? ctx "or"))
-         (not (binding-exists? ctx "theother"))
+         (binding-exists? ctx "theother")
          ; child symbols still valid
          (member (mk-symbol "or") (maru-context-symbols ctx)
                  :test #'eq-object)
@@ -2068,6 +2143,7 @@
                       (+ 1 (list-length (cdr list)))
                       0))")
         (use-it "(cons (list-length '()) (list-length (0 1 2 3)))"))
+    (declare (ignore ctx src use-it))
     nil))
 #|
     (maru-all-transforms ctx src)
@@ -2081,7 +2157,99 @@
                 (if (pair? list)
                     (let ((head (function (car list))))
                   (cons head (map function (cdr list))))))"))
+    (declare (ignore ctx src))
     nil))
+
+#|
+(deftest test-maru-quasiquote
+  (let ((ctx (maru-initialize))
+        (src "(define quasiquote
+                (form
+                  (let ((qq-list) (qq-element) (qq-object))
+                    (set qq-list (lambda (l)
+                                   (if (pair? l)
+                                     (let ((obj (car l)))
+                                       (if (and (pair? obj)
+                                                (= (car obj)
+                                                   'unquote-splicing))
+                                           (if (cdr l)
+                                               (list 'concat-list
+                                                     (cadr obj)
+                                                     (qq-list (cdr l)))
+                                               (cadr obj))
+                                           (list 'cons
+                                                 (qq-object obj)
+                                                 (qq-list (cdr l)))))
+                                     (list 'quote l))))
+                    (set qq-element (lambda (l)
+                                      (let ((head (car l)))
+                                        (if (= head 'unquote)
+                                            (cadr l)
+                                            (qq-list l)))))
+                    (set qq-object (lambda (object)
+                                     (if (pair? object)
+                                         (qq-element object)
+                                         (list 'quote object))))
+                    (lambda (expr)
+                      (qq-object expr)))))")
+        (use-it "`(1 2 3)"))
+    (maru-all-transforms ctx src)
+    (format t "QQ: ~A~%" (maru-printable-object
+                           (maru-lookup ctx (mk-symbol "quasiquote"))))
+    (eq-object (mk-list "quasi-quote" (mk-list (mk-number "1")
+                                               (mk-number "2")
+                                               (mk-number "3")))
+               (maru-all-transforms ctx use-it))))
+|#
+
+#|
+(deftest test-maru-closure-context
+  (let ((ctx (maru-initialize))
+        (src "(define fn
+                (let ((c 2))
+                  (lambda (d)
+                    (+ c d))))")
+        (use-it "(fn 5)"))
+    (maru-all-transforms ctx src)
+    (eq-object (mk-number "7")
+               (maru-all-transforms ctx use-it))))
+|#
+
+#|
+(deftest test-maru-global-counter
+  (let ((ctx (maru-initialize))
+        (src "(block
+                (define n 0)
+                (define inc (lambda () (set n (+ 1 n))))
+                (define reset (lambda () (set n 0)))
+                (define get (lambda () n)))")
+        (use-it-0 "(block
+                     (inc) (inc) (reset) (inc) (get))")
+        (use-it-1 "(block
+                     (inc) (reset) (reset) (reset))"))
+    (maru-all-transforms ctx src)
+    (and (eq-object (mk-number "1")
+                    (maru-all-transforms ctx use-it-0))
+         (eq-object (mk-number "0")
+                    (maru-all-transforms ctx use-it-1)))))
+|#
+
+#|
+(deftest test-maru-closure-counter
+  (let ((ctx (maru-initialize))
+        (src "(let ((n 0))
+                (define inc (lambda ()  (+ 1 n)))
+                (define reset (lambda () (set n 0))))")
+        (use-it-0 "(block
+                     (inc) (inc) (inc))")
+        (use-it-1 "(block
+                     (reset) (inc) (reset) (inc) (inc))"))
+    (maru-all-transforms ctx src)
+    (and (eq-object (mk-number "3")
+                    (maru-all-transforms ctx use-it-0))
+         (eq-object (mk-number "2")
+                    (maru-all-transforms ctx use-it-1)))))
+|#
 
 (deftest test-maru-doesnt-require-quote-nil
   ~"because ian maru reads itself into maru list type it doesn't need"
@@ -2093,4 +2261,18 @@
     (eq-object (mk-bool t)
                (maru-all-transforms ctx src))))
 |#
+
+(deftest test-define-scope
+  (let ((ctx (maru-initialize))
+        (src "(block
+                (define fn
+                  (lambda ()
+                    (define a 10)))
+                (fn)
+                (define b 44))")
+        (use-it "(block (cons a b))"))
+    (maru-all-transforms ctx src)
+    (eq-object (mk-pair (mk-number "10")
+                        (mk-number "44"))
+               (maru-all-transforms ctx use-it))))
 
