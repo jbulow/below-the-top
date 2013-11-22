@@ -839,7 +839,11 @@
   (:method ((lhs nil-object) (rhs bool-object))
     (null (object-value rhs)))
   (:method ((lhs bool-object) (rhs nil-object))
-    (null (object-value lhs))))
+    (null (object-value lhs)))
+  ;; catch all
+  (:method (lhs rhs)
+    nil))
+  
 
 (defmethod maru-nil? ((object basic-object))
   (eq-object object (maru-nil)))
@@ -965,7 +969,8 @@
   (let ((binding (maru-lookup *ctx* object)))
     (if binding
         `(nil . ,binding)
-        `(nil . ,object))))
+        (error "can not eval symbol ``~A''; no binding!"
+               (object-value object)))))
 
 (defmethod inform ((object symbol-object)
                    (transformer-name (eql 'eval))
@@ -1044,8 +1049,11 @@
   (declare (special *ctx*))
   (let ((child-ctx nil)
         (eval-transformer (make-transformer :name 'eval)))
-    ;; create lexical env
-    (setf child-ctx (maru-spawn-child-env *ctx*))
+    ;; use the lexical env from the closure
+    ;; FIXME: should we spawn the child here or in
+    ;;        maru-primitive-lambda(...)?
+    (setf child-ctx
+          (maru-spawn-child-env (runtime-closure-object-ctx object)))
     ;; add arguments/parameters to lexical env
     (dolist (arg-param (zip (car (runtime-closure-object-src object))
                             args))
@@ -2202,7 +2210,6 @@
                (maru-all-transforms ctx use-it))))
 |#
 
-#|
 (deftest test-maru-closure-context
   (let ((ctx (maru-initialize))
         (src "(define fn
@@ -2213,9 +2220,7 @@
     (maru-all-transforms ctx src)
     (eq-object (mk-number "7")
                (maru-all-transforms ctx use-it))))
-|#
 
-#|
 (deftest test-maru-global-counter
   (let ((ctx (maru-initialize))
         (src "(block
@@ -2232,13 +2237,11 @@
                     (maru-all-transforms ctx use-it-0))
          (eq-object (mk-number "0")
                     (maru-all-transforms ctx use-it-1)))))
-|#
 
-#|
 (deftest test-maru-closure-counter
   (let ((ctx (maru-initialize))
         (src "(let ((n 0))
-                (define inc (lambda ()  (+ 1 n)))
+                (define inc (lambda () (set n (+ 1 n))))
                 (define reset (lambda () (set n 0))))")
         (use-it-0 "(block
                      (inc) (inc) (inc))")
@@ -2249,10 +2252,9 @@
                     (maru-all-transforms ctx use-it-0))
          (eq-object (mk-number "2")
                     (maru-all-transforms ctx use-it-1)))))
-|#
 
 (deftest test-maru-doesnt-require-quote-nil
-  ~"because ian maru reads itself into maru list type it doesn't need"
+  ~"because imaru reads itself into maru list type it doesn't need"
   ~" to quote the empty list, we should match this"
   nil)
 #|
