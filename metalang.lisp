@@ -317,11 +317,11 @@
   (:method ((object form-object))
     "<form-object>")
   (:method ((object pair-object))
-    (scat "<pair-object ``"
+    (scat "("
           (maru-printable-object (pair-object-car object))
-          "'' ``"
+          " . "
           (maru-printable-object (pair-object-cdr object))
-          "''")))
+          ")")))
 
 (defun maru-printable (sexpr)
   (tree-map #'maru-printable-object sexpr))
@@ -442,9 +442,7 @@
 (defun maru-primitive-quote (ctx &rest args)
   (declare (ignore ctx))
   (assert (= 1 (length args)))
-  (if (listp (car args))
-      (internal-list-to-maru-list (car args))
-      (car args)))
+  (car args))
 
 ; fixed
 (defun maru-primitive-if (ctx &rest args)
@@ -884,7 +882,16 @@
                  (transformer-name (eql 'type))
                  (args list))
   (declare (special *ctx*))
-  `(nil . ,(cons (type-it *ctx* object) args)))
+  (let ((typed-lead (type-it *ctx* object)))
+    ;; HACKY
+    (if (and (typep typed-lead 'symbol-object)
+             (or (eq-object (mk-symbol "quote") typed-lead)
+                 (eq-object (mk-symbol "quasiquote") typed-lead)))
+        (if (listp (car args))
+            `(nil . ,(cons typed-lead
+                           `(,(internal-list-to-maru-list (car args)))))
+            `(nil . ,(cons typed-lead args)))
+        `(nil . ,(cons typed-lead args)))))
 
 
 ;;;;;;;;;; list as lead ;;;;;;;;;;
@@ -1149,7 +1156,7 @@
 (defmethod inform ((object form-object)
                    (transformer-name (eql 'expand))
                    (whatami (eql 'arg)))
-  object)
+  `(nil . ,object))
 
 (defmethod inform ((object form-object)
                    (transformer-name (eql 'expand))
@@ -1409,10 +1416,10 @@
         (typed-expr
           (list (mk-symbol "define") (mk-symbol "a")
                 (list (mk-symbol "quote")
-                      (list
+                      (mk-list
                         (mk-number "1")
-                        (list (mk-number "2")
-                              (mk-number "3")))))))
+                        (mk-list (mk-number "2")
+                                 (mk-number "3")))))))
     (eq-tree (type-expr ctx src) typed-expr
              :test #'eq-object)))
 
@@ -2168,7 +2175,7 @@
     (declare (ignore ctx src))
     nil))
 
-#|
+;; FIXME: this seems to be close; but not quite right, hard to test
 (deftest test-maru-quasiquote
   (let ((ctx (maru-initialize))
         (src "(define quasiquote
@@ -2202,13 +2209,10 @@
                       (qq-object expr)))))")
         (use-it "`(1 2 3)"))
     (maru-all-transforms ctx src)
-    (format t "QQ: ~A~%" (maru-printable-object
-                           (maru-lookup ctx (mk-symbol "quasiquote"))))
     (eq-object (mk-list "quasi-quote" (mk-list (mk-number "1")
                                                (mk-number "2")
                                                (mk-number "3")))
                (maru-all-transforms ctx use-it))))
-|#
 
 (deftest test-maru-closure-context
   (let ((ctx (maru-initialize))
@@ -2277,4 +2281,15 @@
     (eq-object (mk-pair (mk-number "10")
                         (mk-number "44"))
                (maru-all-transforms ctx use-it))))
+
+(deftest test-quote-pairing@typing
+  (let ((ctx (maru-initialize))
+        (src0 "'(1 2 a)")
+        (src1 "'5"))
+    (and (eq-object (mk-list (mk-number "1")
+                             (mk-number "2")
+                             (mk-symbol "a"))
+                     (maru-all-transforms ctx src0))
+         (eq-object (mk-number "5")
+                    (maru-all-transforms ctx src1)))))
 
