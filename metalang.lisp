@@ -118,6 +118,10 @@
   (let ((quoted (tokenize next-char-fn read-table)))
     (list "quote" quoted)))
 
+(defun quasiquote-handler (next-char-fn read-table)
+  (let ((quoted (tokenize next-char-fn read-table)))
+    (list "quasiquote" quoted)))
+
 (defun read-macro? (c read-table)
   (assoc c read-table :test #'char=))
 
@@ -1279,6 +1283,14 @@
            '("123" ("quote" ("quote" "and"))
                    ("quote" ("a" "b" "c"))))))
 
+(deftest test-desugar-quasiquote
+  (let ((next-char-fn
+          (next-char-factory "(842 `(this that another (9)) `4)"))
+        (read-table '((#\` . quasiquote-handler))))
+    (equal (tokenize next-char-fn read-table)
+           '("842" ("quasiquote" ("this" "that" "another" ("9")))
+             ("quasiquote" "4")))))
+
 (deftest test-next-char-factory-peek-bug
   (let ((next-char-fn
           (next-char-factory "something")))
@@ -1493,7 +1505,8 @@
                              (mk-number "14"))))))      ;; else
 
 (defun untype-expr (src)
-  (let ((read-table '((#\' . quote-handler) (#\, . unquote-handler))))
+  (let ((read-table '((#\' . quote-handler) (#\, . unquote-handler)
+                      (#\` . quasiquote-handler))))
     (untype-everything
       (tokenize (next-char-factory src) read-table))))
 
@@ -2042,6 +2055,33 @@
                                  (mk-list (mk-number "4")))
                         (mk-string :value "five"))
                (maru-all-transforms ctx src))))
+
+(deftest test-maru-define-form
+  (let ((ctx (maru-initialize))
+        (src "(block
+                (define define-form (form (lambda (name args . body)
+                  `(define ,name (form (lambda ,args ,@body))))))
+                (define-form define-function (name args . body)
+                  `(define ,name (lambda ,args ,@body)))
+                (define-function list-length (list)
+                  (if (pair? list)
+                      (+ 1 (list-length (cdr list)))
+                      0))")
+        (use-it "(cons (list-length '()) (list-length (0 1 2 3)))"))
+    nil))
+#|
+    (maru-all-transforms ctx src)
+    (eq-object (mk-pair (maru-nil) (mk-number 4))
+               (maru-all-transforms ctx use-it))))
+|#
+
+(deftest test-maru-map
+  (let ((ctx (maru-initialize))
+        (src "(define-function map (function list)
+                (if (pair? list)
+                    (let ((head (function (car list))))
+                  (cons head (map function (cdr list))))))"))
+    nil))
 
 (deftest test-maru-doesnt-require-quote-nil
   ~"because ian maru reads itself into maru list type it doesn't need"
