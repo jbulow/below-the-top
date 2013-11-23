@@ -1590,10 +1590,18 @@
 (defun maru-all-transforms (ctx src)
   (let ((expand-transformer (make-transformer :name 'expand))
         (eval-transformer (make-transformer :name 'eval))
-        (typed-expr (type-expr ctx src)))
-    (transform eval-transformer
-               (transform expand-transformer typed-expr ctx)
-               ctx)))
+        (typed-expr (type-expr ctx src))
+        (expanded-expr nil)
+        (evald-expr nil))
+    (setf expanded-expr
+          (transform expand-transformer typed-expr ctx))
+    (setf evald-expr
+          (transform eval-transformer expanded-expr ctx))
+    ; (when (atom expanded-expr)
+        ; (format t "EXPAND: ~A~%" (maru-printable-object expanded-expr))
+        ; (format t "EVALD : ~A~%" (maru-printable-object evald-expr)))
+    evald-expr))
+
 
 (deftest test-maru-eval-with-fixed
   (let* ((ctx (maru-initialize))
@@ -2292,4 +2300,25 @@
                      (maru-all-transforms ctx src0))
          (eq-object (mk-number "5")
                     (maru-all-transforms ctx src1)))))
+
+(deftest test-macros
+  (let ((ctx (maru-initialize))
+        (src "(define m
+                (form
+                  (let ((fn) (gn))
+                    (set fn
+                      (lambda (n)
+                        (* n 10)))
+                    (set gn
+                      (lambda (i)
+                        (list 'cons i i)))
+                    (lambda ()
+                        (gn (fn 5))))))")
+        (use-it "(m)"))
+    (maru-all-transforms ctx src)
+    (eq-object (mk-pair (mk-symbol "cons")
+                        (mk-pair (mk-number "50")
+                                 (mk-pair (mk-number "50")
+                                          (maru-nil))))
+               (maru-all-transforms ctx use-it))))
 
