@@ -182,42 +182,98 @@
 ;;;     infrastructure
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+;;;;; transformer psuedo-list ;;;;;
+
+;;; begin magic
+(defmacro defsugar (name)
+  (let ((special-name 
+          (intern (string-upcase (scat "*" (string name) "*")))))
+    `(defun ,name (&rest args)
+       (declare (special ,special-name))
+       (assert ,special-name)
+       (apply ,special-name args))))
+
+(defstruct tfuncs
+  car cdr cons null nil atom listp)
+
+(declaim (special *tcar* *tcdr* *tcons* *tnull*
+                  *tnil* *tatom* *tlistp*))
+
+(defmacro let-sugar (tfuncs &rest body)
+  `(let ((*tcar* (tfuncs-car ,tfuncs))   (*tcdr* (tfuncs-cdr ,tfuncs))
+         (*tcons* (tfuncs-cons ,tfuncs)) (*tnull* (tfuncs-null ,tfuncs))
+         (*tnil* (tfuncs-nil ,tfuncs))   (*tatom* (tfuncs-atom ,tfuncs))
+         (*tlistp* (tfuncs-listp ,tfuncs)))
+     ,@body))
+
+(defsugar tcar)
+(defsugar tcdr)
+(defsugar tcons)
+(defsugar tnull)
+(defsugar tnil)
+(defsugar tatom)
+(defsugar tlistp)
+
+(defun std-nil ()
+  nil)
+
+(defun std-tfuncs ()
+  (make-tfuncs :car   #'car
+               :cdr   #'cdr
+               :cons  #'cons
+               :null  #'null
+               :nil   #'std-nil
+               :atom  #'atom
+               :listp #'listp))
+
+(defun tlength (tlist)
+  (declare (special *tnull* *tcdr*))
+  (cond ((tnull tlist) 0)
+        (t (1+ (tlength (tcdr tlist))))))
+
+(defun tmapcar (fn tlist)
+  (declare (special *tnull* *tcar* *tcdr*))
+  (cond ((tnull tlist) '())
+        (t (cons (funcall fn (tcar tlist))
+                 (tmapcar fn (tcdr tlist))))))
+
 (defun back-talk-arg (transformer expr)
   (declare (special *ctx*))
-  (assert (typep expr 'atom))
+  (assert (tatom expr))
   ;; response : (transform-more? . sexpr)
   (let ((response (inform expr (transformer-name transformer) 'arg)))
-    (if (car response)
-        (transform transformer (cdr response) *ctx*)
-        (cdr response))))
+    (if (tcar response)
+        (transform transformer (tcdr response) *ctx*)
+        (tcdr response))))
 
 (defun back-talk-sexpr (transformer lead &key expr-args)
   (declare (special *ctx*))
-  (assert (typep expr-args 'list))
+  (assert (tlistp expr-args))
   ;; response : can-i-talk-to-your-arguments?
   (let* ((response (inform lead (transformer-name transformer) 'lead))
-         (args (mapcar #'(lambda (a)
-                           (if response
-                               (transform transformer a *ctx*)
-                               (identity a)))
-                       expr-args)))
+         (args (tmapcar #'(lambda (a)
+                            (if response
+                                (transform transformer a *ctx*)
+                                (identity a)))
+                        expr-args)))
       ;; response : (transform-more? . sexpr)
       (let ((response-2
               (pass lead (transformer-name transformer) args)))
-        (if (car response-2)
-            (transform transformer (cdr response-2) *ctx*)
-            (cdr response-2)))))
+        (if (tcar response-2)
+            (transform transformer (tcdr response-2) *ctx*)
+            (tcdr response-2)))))
 
 ;;; transform a single expression {sexpression, atom}
-(defun transform (transformer expr ctx)
-  (let ((*ctx* ctx))
-    (declare (special *ctx*))
-    (cond ((null expr) '())
-          ((atom expr) (back-talk-arg transformer expr))
-          (t
-            (back-talk-sexpr transformer
-                             (car expr)
-                             :expr-args (cdr expr))))))
+(defun transform (transformer expr ctx &key (tfuncs (std-tfuncs)))
+  (let-sugar tfuncs
+    (let ((*ctx* ctx))
+      (declare (special *ctx*))
+      (cond ((null expr) '())
+            ((atom expr) (back-talk-arg transformer expr))
+            (t
+              (back-talk-sexpr transformer
+                               (tcar expr)
+                               :expr-args (tcdr expr)))))))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -325,6 +381,29 @@
 
 (defun maru-printable (sexpr)
   (tree-map #'maru-printable-object sexpr))
+
+(defgeneric maru-atom? (object)
+  (:method ((object pair-object))
+    nil)
+  (:method (object)
+    t))
+
+(defgeneric maru-list? (object)
+  (:method ((object nil-object))
+    t)
+  (:method ((object pair-object))
+    t)
+  (:method (object)
+    nil))
+
+(defun maru-tfuncs ()
+  (make-tfuncs :car   #'pair-object-car
+               :cdr   #'pair-object-cdr
+               :cons  #'mk-pair
+               :null  #'maru-nil?
+               :nil   #'maru-nil
+               :atom  #'maru-atom?
+               :listp #'maru-list?))
 
 ;;; > intern primitives and add their bindings to global env
 ;;; > add runtime compositioners
@@ -1259,6 +1338,11 @@
          (progn
            (funcall next-char-fn 'unread)
            (char= (funcall next-char-fn 'peek) #\o)))))
+
+(deftest test-tsugar
+  (let-sugar (std-tfuncs)
+    (and (equal '(1 . 2) (tcons 1 2))
+         (eql 5 (tcar (tcons 5 4))))))
 
 (deftest test-tokenize-parenlist
   (let ((next-char-fn (next-char-factory "(big fast (cars) are fast)")))
