@@ -1756,8 +1756,8 @@
 (defun untype-expr (src)
   (let ((read-table '((#\' . quote-handler) (#\, . unquote-handler)
                       (#\` . quasiquote-handler))))
-    (print (untype-everything
-      (tokenize (next-char-factory src) read-table)))))
+    (untype-everything
+      (tokenize (next-char-factory src) read-table))))
 
 (defun type-expr (ctx src)
   (transform (make-transformer :name 'type) (untype-expr src) ctx))
@@ -2419,12 +2419,15 @@
                                          (list 'quote object))))
                     (lambda (expr)
                       (qq-object expr)))))")
-        (use-it "`(1 2 3)"))
+        (use-it-0 "`(1 (2) 3)")
+        (use-it-1 "`9"))
     (maru-all-transforms ctx src)
-    (eq-object (mk-list "quasi-quote" (mk-list (mk-number "1")
-                                               (mk-number "2")
-                                               (mk-number "3")))
-               (maru-all-transforms ctx use-it))))
+    (and (eq-object (mk-list (mk-number "1")
+                             (mk-list (mk-number "2"))
+                             (mk-number "3"))
+                    (maru-all-transforms ctx use-it-0))
+         (eq-object (mk-number "9")
+                    (maru-all-transforms ctx use-it-1)))))
 
 (deftest test-maru-closure-context
   (let ((ctx (maru-initialize))
