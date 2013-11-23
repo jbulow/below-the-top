@@ -962,15 +962,7 @@
                  (args list))
   (declare (special *ctx*))
   (let ((typed-lead (type-it *ctx* object)))
-    ;; HACKY
-    (if (and (typep typed-lead 'symbol-object)
-             (or (eq-object (mk-symbol "quote") typed-lead)
-                 (eq-object (mk-symbol "quasiquote") typed-lead)))
-        (if (listp (car args))
-            `(nil . ,(cons typed-lead
-                           `(,(internal-list-to-maru-list (car args)))))
-            `(nil . ,(cons typed-lead args)))
-        `(nil . ,(cons typed-lead args)))))
+    `(nil . ,(mk-pair typed-lead (internal-list-to-maru-list args)))))
 
 
 ;;;;;;;;;; list as lead ;;;;;;;;;;
@@ -1455,13 +1447,14 @@
                         (tokenize
                           (next-char-factory
                             "(some-fn a-sym (more here) sym9001)"))))
-        (typed-expr (list (mk-symbol "some-fn")
-                          (mk-symbol "a-sym")
-                          (list (mk-symbol "more") (mk-symbol "here"))
-                          (mk-symbol "sym9001")))
+        (typed-expr (mk-list (mk-symbol "some-fn")
+                             (mk-symbol "a-sym")
+                             (mk-list (mk-symbol "more")
+                                      (mk-symbol "here"))
+                             (mk-symbol "sym9001")))
         (ctx (maru-mk-ctx)))
-    (eq-tree (transform type-transformer untyped-expr ctx) typed-expr
-             :test #'eq-object)))
+    (eq-object typed-expr
+               (transform type-transformer untyped-expr ctx))))
 
 (deftest test-type-transformer-number
   (let ((type-transformer (make-transformer :name 'type))
@@ -1469,12 +1462,11 @@
                         (tokenize
                           (next-char-factory
                             "(trees 0x123 (green 2) 0X456)"))))
-        (typed-expr (list (mk-symbol "trees") (mk-number "123" :hex t)
-                          (list (mk-symbol "green") (mk-number "2"))
-                          (mk-number "456" :hex t)))
+        (typed-expr (mk-list (mk-symbol "trees") (mk-number "123" :hex t)
+                             (mk-list (mk-symbol "green") (mk-number "2"))
+                             (mk-number "456" :hex t)))
         (ctx (maru-mk-ctx)))
-    (eq-tree (transform type-transformer untyped-expr ctx) typed-expr
-             :test #'eq-object)))
+    (eq-object (transform type-transformer untyped-expr ctx) typed-expr)))
 
 (deftest test-type-transform-char-and-string
   (let ((type-transformer (make-transformer :name 'type))
@@ -1483,16 +1475,15 @@
                           (next-char-factory
                             "(running \"man\" ?r (u ?n \"s\") ?!)"))))
         (typed-expr
-          (list (mk-symbol "running")
-                (mk-string :value "man")
-                (mk-char #\r)
-                (list (mk-symbol "u")
-                      (mk-char #\n)
-                      (mk-string :value "s"))
-                (mk-char #\!)))
+          (mk-list (mk-symbol "running")
+                   (mk-string :value "man")
+                   (mk-char #\r)
+                   (mk-list (mk-symbol "u")
+                            (mk-char #\n)
+                            (mk-string :value "s"))
+                   (mk-char #\!)))
         (ctx (maru-mk-ctx)))
-    (eq-tree (transform type-transformer untyped-expr ctx) typed-expr
-             :test #'eq-object)))
+    (eq-object (transform type-transformer untyped-expr ctx) typed-expr)))
 
 (deftest test-type-quoted-list
   (let ((ctx (maru-initialize))
