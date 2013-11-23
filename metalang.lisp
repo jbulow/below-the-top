@@ -71,7 +71,7 @@
 ;;;; > FIXME: we could treat #\( as a macro character
 (defun tokenize (next-char-fn &optional read-table)
   (let ((c (funcall next-char-fn)))
-    (cond ((null c) '())
+    (cond ((null c) (error "tokenize failed to find a form!"))
           ((char= c #\()
            (funcall next-char-fn 'unread)
            (tokenize-parenlist next-char-fn read-table))
