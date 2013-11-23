@@ -525,10 +525,10 @@
 (defun internal-list-to-maru-list (list)
   (assert (listp list))
   (cond ((null list) (maru-nil))
-        ((atom (car list))
-         (mk-pair (car list) (internal-list-to-maru-list (cdr list))))
-        (t (mk-pair (internal-list-to-maru-list (car list))
-                    (internal-list-to-maru-list (cdr list))))))
+        ((listp (car list))
+         (mk-pair (internal-list-to-maru-list (car list))
+                  (internal-list-to-maru-list (cdr list))))
+        (t (mk-pair (car list) (internal-list-to-maru-list (cdr list))))))
 
 (defun maru-list-to-internal-list (maru-list)
   (assert (maru-list? maru-list))
@@ -566,7 +566,8 @@
     (if (not (maru-nil? (nice-eval test)))
         (nice-eval then)
         (let ((out nil))
-          (dolist (e else out)                    ; implicit block
+          ; implicit block
+          (dolist (e (maru-list-to-internal-list-1 else) out)
             (setf out (nice-eval e)))))))
 
 ; expr
@@ -738,9 +739,9 @@
     (setf (cdr binding) (nice-eval (maru-cadr args)))))
 
 ; expr
-(defun maru-primitive-pair? (ctx &rest args)
+(defun maru-primitive-pair? (ctx args)
   (declare (ignore ctx))
-  (mk-bool (typep (car args) 'pair-object)))
+  (mk-bool (typep (maru-car args) 'pair-object)))
 
 ; expr
 (defun maru-primitive-list (ctx &rest args)
@@ -748,39 +749,43 @@
   (apply #'mk-list args))
 
 ; expr
-(defun maru-primitive-string (ctx &rest args)
+(defun maru-primitive-string (ctx args)
   (declare (ignore ctx))
-  (assert (and (= 1 (length args)) (numberp (object-value (car args)))))
-  (mk-string :size (object-value (car args))))
+  (assert (and (= 1 (maru-length args))
+               (typep (maru-car args) 'number-object)))
+  (mk-string :size (object-value (maru-car args))))
 
 ; expr
-(defun maru-primitive-string-length (ctx &rest args)
+(defun maru-primitive-string-length (ctx args)
   (declare (ignore ctx))
-  (assert (and (= 1 (length args)) (typep (car args) 'string-object)))
-  (mk-number (to-string (string-object-size (car args)))))
+  (assert (and (= 1 (maru-length args))
+               (typep (maru-car args) 'string-object)))
+  (mk-number (to-string (string-object-size (maru-car args)))))
 
 ; expr
-(defun maru-primitive-string-at (ctx &rest args)
+(defun maru-primitive-string-at (ctx args)
   (declare (ignore ctx))
-  (assert (and (= 2 (length args)) (typep (car args) 'string-object)
-               (typep (cadr args) 'number-object)))
-  (let ((index (object-value (cadr args))))
-    (if (and (>= index 0) (< index (string-object-size (car args))))
-      (mk-char (elt (object-value (car args)) index))
+  (assert (and (= 2 (maru-length args))
+               (typep (maru-car args) 'string-object)
+               (typep (maru-cadr args) 'number-object)))
+  (let ((index (object-value (maru-cadr args))))
+    (if (and (>= index 0) (< index (string-object-size (maru-car args))))
+      (mk-char (elt (object-value (maru-car args)) index))
       (maru-nil))))
 
 ; expr
-(defun maru-primitive-set-string-at (ctx &rest args)
+(defun maru-primitive-set-string-at (ctx args)
   (declare (ignore ctx))
-  (assert (and (= 3 (length args)) (typep (car args) 'string-object)
-               (typep (cadr args) 'number-object)
-               (typep (cadr args) 'number-object)))
-  (let ((index (object-value (cadr args)))
-        (char (object-value (caddr args))))
-    (if (and (>= index 0) (< index (string-object-size (car args))))
+  (assert (and (= 3 (maru-length args))
+               (typep (maru-car args) 'string-object)
+               (typep (maru-cadr args) 'number-object)
+               (typep (maru-cadr args) 'number-object)))
+  (let ((index (object-value (maru-cadr args)))
+        (char (object-value (maru-caddr args))))
+    (if (and (>= index 0) (< index (string-object-size (maru-car args))))
       (progn
-        (setf (elt (object-value (car args)) index) char)
-        (car args))
+        (setf (elt (object-value (maru-car args)) index) char)
+        (maru-car args))
       (maru-nil))))
 
 ; expr
@@ -852,6 +857,9 @@
 
 (defmethod maru-cadar (maru-list)
   (maru-car (maru-cdr (maru-car maru-list))))
+
+(defmethod maru-caddr (maru-list)
+  (maru-car (maru-cdr (maru-cdr maru-list))))
 
 (defgeneric maru-length (pair)
   (:method ((pair pair-object))
@@ -1726,7 +1734,6 @@
          (eq-object (maru-car (maru-cdr out)) (mk-number "100"))
          (eq-object (maru-cdr (maru-cdr out)) (mk-number "22")))))
 
-#|
 (deftest test-maru-primitive-if-simple
   (let ((ctx (maru-initialize)))
          ;; test 'then' branch
@@ -1734,24 +1741,25 @@
                     (funcall (function-object-fn
                                (maru-lookup ctx (mk-symbol "if")))
                              ctx
-                             (mk-string :value "not-nil")     ;; predicate
-                             (mk-string :value "goodbye")      ;; then
-                             (mk-number "100")))        ;; else
+                             (mk-list
+                               (mk-string :value "not-nil")  ;; predicate
+                               (mk-string :value "goodbye")  ;; then
+                               (mk-number "100"))))          ;; else
          ;; test 'else' branch
          (eq-object (mk-number "14")
                     (funcall (function-object-fn
                                 (maru-lookup ctx (maru-intern ctx "if")))
                              ctx
-                             (maru-nil)                 ;; predicate
-                             (mk-number "12")           ;; then
-                             (mk-number "14"))))))      ;; else
-|#
+                             (mk-list
+                               (maru-nil)                 ;; predicate
+                               (mk-number "12")           ;; then
+                               (mk-number "14")))))))      ;; else
 
 (defun untype-expr (src)
   (let ((read-table '((#\' . quote-handler) (#\, . unquote-handler)
                       (#\` . quasiquote-handler))))
-    (untype-everything
-      (tokenize (next-char-factory src) read-table))))
+    (print (untype-everything
+      (tokenize (next-char-factory src) read-table)))))
 
 (defun type-expr (ctx src)
   (transform (make-transformer :name 'type) (untype-expr src) ctx))
@@ -1762,18 +1770,21 @@
         (typed-expr (type-expr ctx src))
         (expanded-expr nil)
         (evald-expr nil))
+    ; (when (atom typed-expr)
+        ; (format t "TYPED: ~A~%" (maru-printable-object typed-expr)))
     (setf expanded-expr
           (transform expand-transformer
                      typed-expr
                      ctx
                      :tfuncs (maru-tfuncs)))
+    ; (when (atom expanded-expr)
+        ; (format t "EXPAND: ~A~%" (maru-printable-object expanded-expr)))
     (setf evald-expr
           (transform eval-transformer
                      expanded-expr
                      ctx
                      :tfuncs (maru-tfuncs)))
-    ; (when (atom expanded-expr)
-        ; (format t "EXPAND: ~A~%" (maru-printable-object expanded-expr))
+    ; (when (atom evald-expr)
         ; (format t "EVALD : ~A~%" (maru-printable-object evald-expr)))
     evald-expr))
 
@@ -1868,7 +1879,6 @@
          (eq-object (mk-string :value "some-value")
                     (maru-lookup ctx a-sym)))))
 
-#|
 (deftest test-maru-redefine-bug
   (let* ((ctx (maru-initialize))
          (src "(block
@@ -1878,7 +1888,6 @@
                  a)"))
     (eq-object (mk-number "20")
                (maru-all-transforms ctx src))))
-|#
 
 (deftest test-maru-primitive-arithmetic
   (let* ((ctx (maru-initialize))
@@ -2207,7 +2216,6 @@
     (eq-object (mk-number "57")
                (maru-all-transforms ctx src0))))
 
-#|
 (deftest test-maru-let-primitive-bug
   "values in let bindings must be evaluated"
   (let* ((ctx (maru-initialize))
@@ -2215,7 +2223,6 @@
                  a)"))
     (eq-object (maru-nil)
                (maru-all-transforms ctx src))))
-|#
 
 (deftest test-maru-let-primitive-implicit-binding-block-bug
   "values in let bindings are in implicit block"
@@ -2230,13 +2237,11 @@
          (eq-object (mk-number "250")
                     (maru-all-transforms ctx a)))))
 
-#|
 (deftest test-maru-empty-list-bug
   (let* ((ctx (maru-initialize))
          (src "(let ()
                  7)"))
     (maru-all-transforms ctx src)))
-|#
 
 #|
 (deftest test-maru-while-primitive
@@ -2265,13 +2270,11 @@
     (eq-object (mk-pair (mk-bool nil) (mk-bool t))
                (maru-all-transforms ctx src0))))
 
-#|
 (deftest test-maru-pair?-primitive-bug
   (let* ((ctx (maru-initialize))
          (src "(pair? '())"))
     (eq-object (maru-nil)
                (maru-all-transforms ctx src))))
-|#
 
 #|
 (deftest test-maru-assq
@@ -2322,6 +2325,7 @@
     (maru-all-transforms ctx code)
     (not (eq-object (maru-nil)
                     (maru-all-transforms ctx use-it)))))
+|#
 
 (deftest test-maru-string-primitive
   (let ((ctx (maru-initialize))
@@ -2350,7 +2354,6 @@
                        (set-string-at s 100 ?j)))"))
     (eq-object (mk-pair (mk-string :value "arything-goes") (maru-nil))
                (maru-all-transforms ctx code))))
-|#
 
 (deftest test-maru-list-primitive
   (let ((ctx (maru-initialize))
