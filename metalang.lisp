@@ -43,13 +43,6 @@
 (defun paren? (c)
   (member c '(#\( #\))))
 
-(defun remove-trailing-paren (next-char-fn)
-  (let ((c (funcall next-char-fn)))
-    (cond ((null c) (error "no trailing paren!"))
-          ((char= c #\)) nil)
-          ((whitespace? c) (remove-trailing-paren next-char-fn))
-          (t (error "remove-trailing-paren has unexpected character!")))))
-
 (defun tokenize-parenlist (next-char-fn read-table)
   (let ((c (funcall next-char-fn))
         (exprs '()))
@@ -60,7 +53,7 @@
         ; push empty lists but not empty strings (whitespace)
         (unless (and (typep e 'string) (zerop (length e)))
           (push e exprs))))
-    (remove-trailing-paren next-char-fn)
+    (assert (char= #\) (funcall next-char-fn)))
     (reverse exprs)))
 
 ;; caller must _know_ that the first character is 'valid'
@@ -1457,16 +1450,6 @@
   (let ((next-char-fn (next-char-factory "(tokenize () this)")))
     (equal (tokenize next-char-fn)
            '("tokenize" nil "this"))))
-
-(deftest test-remove-trailing-paren
-  (let ((next-char-fn-1 (next-char-factory "   )A"))
-        (next-char-fn-2 (next-char-factory ")B")))
-    (and (progn
-           (remove-trailing-paren next-char-fn-1)
-           (char= (funcall next-char-fn-1) #\A))
-         (progn
-           (remove-trailing-paren next-char-fn-2)
-           (char= (funcall next-char-fn-2) #\B)))))
 
 (deftest test-untype-everything
   (let ((next-char-fn
