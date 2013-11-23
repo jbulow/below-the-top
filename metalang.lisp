@@ -656,14 +656,12 @@
 
 ; fixed
 ;; FIXME.
-(defun maru-primitive-while (ctx &rest args)
-  (let ((eval-transformer (make-transformer :name 'eval)))
-    ;; return nil same as boot-eval.c
-    (do ()
-        ((maru-nil? (transform eval-transformer (car args) ctx)) nil)
-      (transform eval-transformer
-                 (cons (mk-symbol "block") (cdr args))
-                 ctx))))
+(defun maru-primitive-while (ctx args)
+  (declare (ignore ctx))
+  ;; return nil same as boot-eval.c
+  (do ()
+      ((maru-nil? (nice-eval (maru-car args))) nil)
+    (nice-eval (mk-pair (mk-symbol "block") (maru-cdr args)))))
 
 ; expr
 (defun maru-primitive-add (ctx args)
@@ -744,9 +742,9 @@
   (mk-bool (typep (maru-car args) 'pair-object)))
 
 ; expr
-(defun maru-primitive-list (ctx &rest args)
+(defun maru-primitive-list (ctx args)
   (declare (ignore ctx))
-  (apply #'mk-list args))
+  args)
 
 ; expr
 (defun maru-primitive-string (ctx args)
@@ -789,11 +787,11 @@
       (maru-nil))))
 
 ; expr
-(defun maru-primitive-form (ctx &rest args)
+(defun maru-primitive-form (ctx args)
   (declare (ignore ctx))
-  (assert (and (= 1 (length args)) (typep (car args)
-                                          'runtime-closure-object)))
-  (mk-form (car args)))
+  (assert (and (= 1 (maru-length args))
+               (typep (maru-car args) 'runtime-closure-object)))
+  (mk-form (maru-car args)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;  maru type transformer
@@ -2243,7 +2241,6 @@
                  7)"))
     (maru-all-transforms ctx src)))
 
-#|
 (deftest test-maru-while-primitive
   (let* ((ctx (maru-initialize))
          (src0 "(block
@@ -2259,7 +2256,6 @@
                                           (mk-pair (mk-number "10")
                                                    (mk-number "10")))))
                (maru-all-transforms ctx src0))))
-|#
 
 (deftest test-maru-pair?-primitive
   (let* ((ctx (maru-initialize))
@@ -2276,7 +2272,6 @@
     (eq-object (maru-nil)
                (maru-all-transforms ctx src))))
 
-#|
 (deftest test-maru-assq
   (let ((ctx (maru-initialize))
         (code "(define assq
@@ -2325,7 +2320,6 @@
     (maru-all-transforms ctx code)
     (not (eq-object (maru-nil)
                     (maru-all-transforms ctx use-it)))))
-|#
 
 (deftest test-maru-string-primitive
   (let ((ctx (maru-initialize))
@@ -2393,7 +2387,6 @@
     (declare (ignore ctx src))
     nil))
 
-#|
 ;; FIXME: this seems to be close; but not quite right, hard to test
 (deftest test-maru-quasiquote
   (let ((ctx (maru-initialize))
@@ -2432,7 +2425,6 @@
                                                (mk-number "2")
                                                (mk-number "3")))
                (maru-all-transforms ctx use-it))))
-|#
 
 (deftest test-maru-closure-context
   (let ((ctx (maru-initialize))
@@ -2445,7 +2437,6 @@
     (eq-object (mk-number "7")
                (maru-all-transforms ctx use-it))))
 
-#|
 (deftest test-maru-global-counter
   (let ((ctx (maru-initialize))
         (src "(block
@@ -2462,9 +2453,7 @@
                     (maru-all-transforms ctx use-it-0))
          (eq-object (mk-number "0")
                     (maru-all-transforms ctx use-it-1)))))
-|#
 
-#|
 (deftest test-maru-closure-counter
   (let ((ctx (maru-initialize))
         (src "(let ((n 0))
@@ -2479,7 +2468,6 @@
                     (maru-all-transforms ctx use-it-0))
          (eq-object (mk-number "2")
                     (maru-all-transforms ctx use-it-1)))))
-|#
 
 (deftest test-maru-doesnt-require-quote-nil
   ~"because imaru reads itself into maru list type it doesn't need"
@@ -2492,7 +2480,6 @@
                (maru-all-transforms ctx src))))
 |#
 
-#|
 (deftest test-define-scope
   (let ((ctx (maru-initialize))
         (src "(block
@@ -2506,7 +2493,6 @@
     (eq-object (mk-pair (mk-number "10")
                         (mk-number "44"))
                (maru-all-transforms ctx use-it))))
-|#
 
 (deftest test-quote-pairing@typing
   (let ((ctx (maru-initialize))
@@ -2519,7 +2505,6 @@
          (eq-object (mk-number "5")
                     (maru-all-transforms ctx src1)))))
 
-#|
 (deftest test-macros
   (let ((ctx (maru-initialize))
         (src "(define m
@@ -2535,12 +2520,8 @@
                         (gn (fn 5))))))")
         (use-it "(m)"))
     (maru-all-transforms ctx src)
-    (eq-object (mk-pair (mk-symbol "cons")
-                        (mk-pair (mk-number "50")
-                                 (mk-pair (mk-number "50")
-                                          (maru-nil))))
+    (eq-object (mk-pair (mk-number "50") (mk-number "50"))
                (maru-all-transforms ctx use-it))))
-|#
 
 (deftest test-list-conversion
   (let ((maru-list-0 (mk-list (mk-number "1") (mk-number "2")
