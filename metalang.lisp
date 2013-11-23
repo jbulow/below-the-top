@@ -52,7 +52,16 @@
       (let ((e (tokenize next-char-fn read-table)))
         ; push empty lists but not empty strings (whitespace)
         (unless (and (typep e 'string) (zerop (length e)))
-          (push e exprs))))
+          (if (equal "." e)
+              (progn
+                (setf exprs (reverse exprs))
+                ;; read the expression after the dot
+                (setf (cdr (last exprs))
+                      (tokenize next-char-fn read-table))
+                ;; expression after the dot is last
+                (assert (char= #\) (funcall next-char-fn)))
+                (return-from tokenize-parenlist exprs))
+              (push e exprs)))))
     (assert (char= #\) (funcall next-char-fn)))
     (reverse exprs)))
 
@@ -2351,15 +2360,12 @@
                 (define-function list-length (list)
                   (if (pair? list)
                       (+ 1 (list-length (cdr list)))
-                      0))")
+                      0)))")
         (use-it "(cons (list-length '()) (list-length (0 1 2 3)))"))
-    (declare (ignore ctx src use-it))
-    nil))
-#|
+    (return-from test-maru-define-form nil)
     (maru-all-transforms ctx src)
-    (eq-object (mk-pair (maru-nil) (mk-number 4))
+    (eq-object (mk-pair (maru-nil) (mk-number "4"))
                (maru-all-transforms ctx use-it))))
-|#
 
 (deftest test-maru-map
   (let ((ctx (maru-initialize))
@@ -2524,3 +2530,7 @@
                       (maru-list-to-internal-list maru-list))
                     maru-list))))
 
+(deftest test-dot
+  (let ((src "'(1 . (2 . (3 . 4)))"))
+    (equal '("quote" . (("1" . ("2" . ("3" . "4"))) . nil))
+           (tokenize (next-char-factory src) '((#\' . quote-handler))))))
