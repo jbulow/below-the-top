@@ -2475,13 +2475,10 @@
 (deftest test-maru-doesnt-require-quote-nil
   ~"because imaru reads itself into maru list type it doesn't need"
   ~" to quote the empty list, we should match this"
-  nil)
-#|
   (let ((ctx (maru-initialize))
         (src "(= () '())"))
     (eq-object (mk-bool t)
                (maru-all-transforms ctx src))))
-|#
 
 (deftest test-define-scope
   (let ((ctx (maru-initialize))
