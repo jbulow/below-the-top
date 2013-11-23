@@ -533,13 +533,18 @@
 (defun maru-list-to-internal-list (maru-list)
   (assert (maru-list? maru-list))
   (cond ((maru-nil? maru-list) '())
-        ((maru-atom? (pair-object-car maru-list))
-         (cons (pair-object-car maru-list)
-               (maru-list-to-internal-list (pair-object-cdr maru-list))))
-        (t (cons (maru-list-to-internal-list (pair-object-car maru-list))
+        ((maru-atom? (maru-car maru-list))
+         (cons (maru-car maru-list)
+               (maru-list-to-internal-list (maru-cdr maru-list))))
+        (t (cons (maru-list-to-internal-list (maru-car maru-list))
                  (maru-list-to-internal-list
-                   (pair-object-cdr maru-list))))))
+                   (maru-cdr maru-list))))))
 
+(defun maru-list-to-internal-list-1 (maru-list)
+  (assert (maru-list? maru-list))
+  (cond ((maru-nil? maru-list) '())
+        (t (cons (maru-car maru-list)
+                 (maru-list-to-internal-list-1 (maru-cdr maru-list))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;      maru primitives
@@ -605,7 +610,7 @@
 (defun maru-primitive-and (ctx args)
   (declare (ignore ctx))
   (let ((out (mk-symbol "t")))
-    (dolist (pred (maru-list-to-internal-list args) out)
+    (dolist (pred (maru-list-to-internal-list-1 args) out)
       (setf out (nice-eval pred))
       (when (maru-nil? out)
         (return out)))))
@@ -806,7 +811,10 @@
 (defun mk-symbol (value)
   (make-instance 'symbol-object :value value))
 
-(defclass pair-object (basic-object)
+(defclass list-object (basic-object)
+  ())
+
+(defclass pair-object (list-object)
   ((car :accessor pair-object-car
         :initarg :car)
    (cdr :accessor pair-object-cdr
@@ -854,7 +862,7 @@
   (maru-nil))
 
 ;;; NOTE: nil is not a pair
-(defclass nil-object (basic-object)
+(defclass nil-object (list-object)
   ())
 
 (defun maru-nil ()
@@ -1076,14 +1084,14 @@
 
 (defmethod pass ((object basic-object)
                  (trasformer-name (eql 'eval))
-                 (args pair-object))
+                 (args list-object))
   (error (format nil "implement eval pass for ~A~%"
                  (type-of object))))
 
 ;; FIXME: implement
 (defmethod pass :around ((object basic-object)
                          (transformer-name (eql 'eval))
-                         (args pair-object))
+                         (args list-object))
   (let ((applicator (applicator-from-internal (type-of object))))
     (cond (applicator (error "call the applicator and pass args!"))
           (t (assert (next-method-p)) (call-next-method)))))
@@ -1112,7 +1120,7 @@
 ;;; OF-NOTE: forwarding
 (defmethod pass ((object symbol-object)
                  (transformer-name (eql 'eval))
-                 (args pair-object))
+                 (args list-object))
   (declare (special *ctx*))
   (let ((binding (maru-lookup *ctx* object)))
     (if binding
@@ -1134,7 +1142,7 @@
 
 (defmethod pass ((object expr-object)
                  (transformer-name (eql 'eval))
-                 (args pair-object))
+                 (args list-object))
   (declare (special *ctx*))
   (let ((fn (function-object-fn object)))
     `(nil . ,(tapply-with-context fn *ctx* args))))
@@ -1154,7 +1162,7 @@
 
 (defmethod pass ((object fixed-object)
                  (transformer-name (eql 'eval))
-                 (args pair-object))
+                 (args list-object))
   (declare (special *ctx*))
   (let ((fn (function-object-fn object)))
     `(nil . ,(tapply-with-context fn *ctx* args))))
@@ -1173,24 +1181,24 @@
 
 (defmethod pass ((object runtime-closure-object)
                  (transformer-name (eql 'eval))
-                 (args pair-object))
+                 (args list-object))
   (declare (special *ctx*))
-  (let ((child-ctx nil)
-        (eval-transformer (make-transformer :name 'eval)))
+  (let ((child-ctx nil))
     ;; use the lexical env from the closure
     ;; FIXME: should we spawn the child here or in
     ;;        maru-primitive-lambda(...)?
     (setf child-ctx
           (maru-spawn-child-env (runtime-closure-object-ctx object)))
     ;; add arguments/parameters to lexical env
-    (dolist (arg-param (zip (car (runtime-closure-object-src object))
-                            args))
+    (dolist (arg-param (zip (maru-list-to-internal-list-1
+                              (maru-car
+                                   (runtime-closure-object-src object)))
+                            (maru-list-to-internal-list-1 args)))
       (maru-define-new-binding
         child-ctx (car arg-param) (cadr arg-param)))
     ;; apply the function in the lexical env
-    `(nil . ,(transform eval-transformer
-                        (cadr (runtime-closure-object-src object))
-                        child-ctx))))
+    `(nil . ,(nice-eval (maru-cadr (runtime-closure-object-src object))
+                        :_ctx child-ctx))))
 
 ;;;;;;;;;; runtime closure object ;;;;;;;;;;
 
@@ -1206,7 +1214,7 @@
 
 (defmethod pass ((object number-object)
                  (transformer-name (eql 'eval))
-                 (args pair-object))
+                 (args list-object))
   (error "numbers shouldn't be lead!"))
 
 
@@ -1239,7 +1247,7 @@
 
 (defmethod pass ((object basic-object)
                  (trasformer-name (eql 'expand))
-                 (args pair-object))
+                 (args list-object))
   (declare (special *forwarding-symbol*))
   (if *forwarding-symbol*
       `(nil . ,(tcons *forwarding-symbol* args))
@@ -1277,7 +1285,7 @@
 ;;; OF-NOTE: forwarding
 (defmethod pass ((object symbol-object)
                  (transformer-name (eql 'expand))
-                 (args pair-object))
+                 (args list-object))
   (declare (special *ctx* *forwarding-symbol*))
   (when *forwarding-symbol*
     (return-from pass `(nil . ,(tcons *forwarding-symbol* args))))
@@ -1303,7 +1311,7 @@
 
 (defmethod pass ((object form-object)
                  (transformer-name (eql 'expand))
-                 (args pair-object))
+                 (args list-object))
   (declare (special *ctx*))
   (let ((fn (function-object-fn object)))
     (typecase fn
@@ -1312,10 +1320,13 @@
 
 ;;;;;;;;;; list as lead ;;;;;;;;;;
 
-(defmethod inform ((list pair-object)
+(defmethod inform ((pair pair-object)
                    (transformer-name (eql 'expand))
                    (whatami (eql 'arg)))
-  (error "should never be dispatched on list argument!"))
+  (declare (special *forwarding-symbol*))
+  (if *forwarding-symbol*
+      `(nil . ,*forwarding-symbol*)
+      `(nil . ,pair)))
 
 ;; FIXME: do the right thing
 (defmethod inform ((list pair-object)
@@ -1326,7 +1337,7 @@
 ;; FIXME: do the right thing
 (defmethod pass ((list pair-object)
                  (transformer-name (eql 'expand))
-                 (args pair-object))
+                 (args list-object))
   (declare (special *ctx*))
   (cons nil (tcons list args)))
 
@@ -1875,7 +1886,6 @@
                                    (cons (>= a 4)
                                          (cons (<= a 4)
                                                (!= a 55)))))))"))
-    (format t "~A~%" (maru-printable-object (maru-all-transforms ctx src)))
     (eq-object (mk-pair (mk-bool t)
                         (mk-pair (mk-bool nil)
                                  (mk-pair (mk-bool nil)
@@ -2494,16 +2504,19 @@
                (maru-all-transforms ctx use-it))))
 
 (deftest test-list-conversion
-  (let ((list '(1 2 (3 4) (5 6) 7 8))
+  (let ((maru-list-0 (mk-list (mk-number "1") (mk-number "2")
+                              (mk-list (mk-number "3") (mk-number "4"))
+                              (mk-list (mk-number "5") (mk-number "6"))
+                              (mk-number "7")))
         (maru-list (mk-list (mk-number "1")
                             (mk-number "2")
                             (mk-list (mk-number "9")
                                      (mk-number "0"))
                             (mk-list (mk-list (mk-number "2"))
                                      (mk-number "0")))))
-    (and (equal (maru-list-to-internal-list
-                  (internal-list-to-maru-list list))
-                list)
+    (and (eq-object (internal-list-to-maru-list
+                      (maru-list-to-internal-list maru-list-0))
+                    maru-list-0)
          (eq-object (internal-list-to-maru-list
                       (maru-list-to-internal-list maru-list))
                     maru-list))))
