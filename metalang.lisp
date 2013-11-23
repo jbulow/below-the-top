@@ -37,6 +37,9 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+(define-condition token-error (error)
+  ((text :initarg :text)))
+
 (defun whitespace? (c)
   (member c '(#\Backspace #\Tab #\Newline #\Linefeed #\Page #\Space)))
 
@@ -54,12 +57,16 @@
         (unless (and (typep e 'string) (zerop (length e)))
           (if (equal "." e)
               (progn
+                ;; must have an expression before the dot
+                (when (null exprs)
+                  (error 'token-error :text "need expr before dot"))
                 (setf exprs (reverse exprs))
                 ;; read the expression after the dot
                 (setf (cdr (last exprs))
                       (tokenize next-char-fn read-table))
                 ;; expression after the dot is last
-                (assert (char= #\) (funcall next-char-fn)))
+                (unless (char= #\) (funcall next-char-fn))
+                  (error 'token-error :text "only one expr after dot"))
                 (return-from tokenize-parenlist exprs))
               (push e exprs)))))
     (assert (char= #\) (funcall next-char-fn)))
@@ -80,7 +87,7 @@
 ;;;; > FIXME: we could treat #\( as a macro character
 (defun tokenize (next-char-fn &optional read-table)
   (let ((c (funcall next-char-fn)))
-    (cond ((null c) (error "tokenize failed to find a form!"))
+    (cond ((null c) (error 'token-error :text "no form to tokenize"))
           ((char= c #\()
            (funcall next-char-fn 'unread)
            (tokenize-parenlist next-char-fn read-table))
@@ -1386,6 +1393,16 @@
  `(defun ,name ()
     ,@body))
 
+(defmacro must-signal (condition &rest body)
+  `(handler-case
+     (progn
+       ,@body
+       nil)
+     (,condition (e)
+        (progn
+          (noop e)
+          t))))
+
 (deftest test-whitespace
   (and (whitespace? #\Backspace) (whitespace? #\Newline)
        (not (whitespace? #\a)) (not (whitespace? #\$))))
@@ -1459,6 +1476,35 @@
   (let ((next-char-fn (next-char-factory "(tokenize () this)")))
     (equal (tokenize next-char-fn)
            '("tokenize" nil "this"))))
+
+(deftest test-dot
+  (let ((src "'(1 . (2 . (3 . 4)))"))
+    (equal '("quote" . (("1" . ("2" . ("3" . "4"))) . nil))
+           (tokenize (next-char-factory src) '((#\' . quote-handler))))))
+
+(deftest test-dot-2
+  (let ((src "'((a . b) . (1 . (($ . 3) . 4)))"))
+    (equal '("quote" . ((("a" . "b") . ("1" . (("$" . "3") . "4"))). nil))
+           (tokenize (next-char-factory src) '((#\' . quote-handler))))))
+
+(deftest test-too-many-with-dots
+  (let ((src "'(a . (b . c . d))"))
+    (must-signal token-error
+      (tokenize (next-char-factory src) '((#\' . quote-handler))))))
+
+(deftest test-not-enough-with-dots
+  (let ((src "'( a . ( b . (. e)))"))
+    (must-signal token-error
+      (tokenize (next-char-factory src) '((#\' . quote-handler))))))
+
+(deftest test-no-token
+  (let ((src0 "")
+        (src1 (scat "   " #\Tab #\Newline "   ")))
+    (and (must-signal token-error
+           (tokenize (next-char-factory src0) '((#\' . quote-handler))))
+         (must-signal token-error
+           (tokenize (next-char-factory src1)
+                     '((#\' . quote-handler)))))))
 
 (deftest test-untype-everything
   (let ((next-char-fn
@@ -2530,7 +2576,3 @@
                       (maru-list-to-internal-list maru-list))
                     maru-list))))
 
-(deftest test-dot
-  (let ((src "'(1 . (2 . (3 . 4)))"))
-    (equal '("quote" . (("1" . ("2" . ("3" . "4"))) . nil))
-           (tokenize (next-char-factory src) '((#\' . quote-handler))))))
