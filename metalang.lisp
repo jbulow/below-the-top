@@ -141,6 +141,16 @@
 (defstruct transformer
   name)
 
+(defun nice-eval (expr &key _ctx _tfuncs)
+  (declare (special *ctx* *tfuncs*))
+  (let ((ctx (if _ctx _ctx *ctx*))
+        (tfuncs (if _tfuncs _tfuncs *tfuncs*)))
+    (assert (and expr ctx tfuncs))
+    (transform (make-transformer :name 'eval)
+               expr
+               ctx
+               :tfuncs tfuncs)))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; default fail transformer
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -227,49 +237,57 @@
                :listp #'listp))
 
 (defun tlength (tlist)
-  (declare (special *tnull* *tcdr*))
   (cond ((tnull tlist) 0)
         (t (1+ (tlength (tcdr tlist))))))
 
 (defun tmapcar (fn tlist)
-  (declare (special *tnull* *tcar* *tcdr*))
-  (cond ((tnull tlist) '())
-        (t (cons (funcall fn (tcar tlist))
-                 (tmapcar fn (tcdr tlist))))))
+  (cond ((tnull tlist) (tnil))
+        (t (tcons (funcall fn (tcar tlist))
+                  (tmapcar fn (tcdr tlist))))))
+
+;; this function should never be used if the args are still internal typed
+(defun tapply-with-context (fn ctx args)
+  (assert (typep args 'pair-object))
+  (funcall fn ctx args))
 
 (defun back-talk-arg (transformer expr)
   (declare (special *ctx*))
   (assert (tatom expr))
   ;; response : (transform-more? . sexpr)
   (let ((response (inform expr (transformer-name transformer) 'arg)))
-    (if (tcar response)
-        (transform transformer (tcdr response) *ctx*)
-        (tcdr response))))
+    (if (car response)
+        (transform transformer (cdr response) *ctx*)
+        (cdr response))))
 
 (defun back-talk-sexpr (transformer lead &key expr-args)
-  (declare (special *ctx*))
+  (declare (special *ctx* *tfuncs*))
   (assert (tlistp expr-args))
   ;; response : can-i-talk-to-your-arguments?
   (let* ((response (inform lead (transformer-name transformer) 'lead))
          (args (tmapcar #'(lambda (a)
                             (if response
-                                (transform transformer a *ctx*)
+                                (transform transformer
+                                           a
+                                           *ctx*
+                                           :tfuncs *tfuncs*)
                                 (identity a)))
                         expr-args)))
       ;; response : (transform-more? . sexpr)
       (let ((response-2
               (pass lead (transformer-name transformer) args)))
-        (if (tcar response-2)
-            (transform transformer (tcdr response-2) *ctx*)
-            (tcdr response-2)))))
+        (if (car response-2)
+            (transform transformer (cdr response-2) *ctx*)
+            (cdr response-2)))))
 
 ;;; transform a single expression {sexpression, atom}
 (defun transform (transformer expr ctx &key (tfuncs (std-tfuncs)))
   (let-sugar tfuncs
-    (let ((*ctx* ctx))
-      (declare (special *ctx*))
-      (cond ((null expr) '())
-            ((atom expr) (back-talk-arg transformer expr))
+    (let ((*ctx* ctx)
+          (*tfuncs* tfuncs))    ; necessary for recursive calls
+      (declare (special *ctx* *tfuncs*))
+      (cond ((tnull expr) '())
+            ((tatom expr)
+             (back-talk-arg transformer expr))
             (t
               (back-talk-sexpr transformer
                                (tcar expr)
@@ -385,7 +403,7 @@
 (defgeneric maru-atom? (object)
   (:method ((object pair-object))
     nil)
-  (:method (object)
+  (:method ((object basic-object))
     t))
 
 (defgeneric maru-list? (object)
@@ -512,6 +530,16 @@
         (t (mk-pair (internal-list-to-maru-list (car list))
                     (internal-list-to-maru-list (cdr list))))))
 
+(defun maru-list-to-internal-list (maru-list)
+  (assert (maru-list? maru-list))
+  (cond ((maru-nil? maru-list) '())
+        ((maru-atom? (pair-object-car maru-list))
+         (cons (pair-object-car maru-list)
+               (maru-list-to-internal-list (pair-object-cdr maru-list))))
+        (t (cons (maru-list-to-internal-list (pair-object-car maru-list))
+                 (maru-list-to-internal-list
+                   (pair-object-cdr maru-list))))))
+
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;      maru primitives
@@ -524,22 +552,24 @@
   (car args))
 
 ; fixed
-(defun maru-primitive-if (ctx &rest args)
-  (let ((test (car args))
-        (then (cadr args))
-        (else (cddr args))
-        (eval-transformer (make-transformer :name 'eval)))
-    (if (not (maru-nil? (transform eval-transformer test ctx)))
-        (transform eval-transformer then ctx)
+(defun maru-primitive-if (ctx args)
+  (declare (ignore ctx))
+  (assert (= 3 (tlength args)))
+  (let ((test (pair-object-car args))
+        (then (pair-object-car (pair-object-cdr args)))
+        (else (pair-object-cdr (pair-object-cdr args))))
+    (if (not (maru-nil? (nice-eval test)))
+        (nice-eval then)
         (let ((out nil))
           (dolist (e else out)                    ; implicit block
-            (setf out (transform eval-transformer e ctx)))))))
+            (setf out (nice-eval e)))))))
 
 ; expr
-(defun maru-primitive-cons (ctx &rest args)
+(defun maru-primitive-cons (ctx args)
   (declare (ignore ctx))
-  (assert (= 2 (length args)))
-  (mk-pair (car args) (cadr args)))
+  (assert (= 2 (tlength args)))
+  (mk-pair (pair-object-car args)
+           (pair-object-car (pair-object-cdr args))))
 
 ; expr
 (defun maru-primitive-car (ctx &rest args)
@@ -572,34 +602,35 @@
   (maru-car (maru-car (car args))))
 
 ; fixed
-(defun maru-primitive-and (ctx &rest args)
-  (let ((out (mk-symbol "t"))
-        (eval-transformer (make-transformer :name 'eval)))
-    (dolist (pred args out)
-      (setf out (transform eval-transformer pred ctx))
+(defun maru-primitive-and (ctx args)
+  (declare (ignore ctx))
+  (let ((out (mk-symbol "t")))
+    (dolist (pred (maru-list-to-internal-list args) out)
+      (setf out (nice-eval pred))
       (when (maru-nil? out)
         (return out)))))
 
 ; form
 ; FIXME: Should we be expanding here?
-(defun maru-primitive-define (ctx &rest args)
-  (let ((eval-transformer (make-transformer :name 'eval)))
-    (cdr (maru-define ctx (car args)
-                          (transform eval-transformer
-                                     (cadr args)
-                                     ctx)))))
+(defun maru-primitive-define (ctx args)
+  (cdr
+    (maru-define ctx (pair-object-car args)
+                     (nice-eval (pair-object-car
+                                (pair-object-cdr args))))))
 
 ; expr
-(defun maru-primitive-block (ctx &rest args)
+(defun maru-primitive-block (ctx args)
   (declare (ignore ctx))
-  (if (zerop (length args))
+  ;; FIXME: should use pair object length fn
+  (if (zerop (maru-length args))
       (maru-nil)
-      (car (last args))))
+      (maru-car (maru-last args))))
 
 ; fixed
-(defun maru-primitive-lambda (ctx &rest args)
-  (mk-closure ctx (list (car args)
-                        (cons (mk-symbol "block") (cdr args)))))
+(defun maru-primitive-lambda (ctx args)
+  (mk-closure ctx (mk-list (pair-object-car args)
+                           (mk-pair (mk-symbol "block")
+                                    (pair-object-cdr args)))))
 
 ; fixed
 (defun maru-primitive-let (ctx &rest args)
@@ -628,58 +659,58 @@
                  ctx))))
 
 ; expr
-(defun maru-primitive-add (ctx &rest args)
+(defun maru-primitive-add (ctx args)
   (declare (ignore ctx))
-  (mk-number (to-string (+ (object-value (car args))
-                           (object-value (cadr args))))))
+  (mk-number (to-string (+ (object-value (maru-car args))
+                           (object-value (maru-cadr args))))))
 
 ; expr
-(defun maru-primitive-sub (ctx &rest args)
+(defun maru-primitive-sub (ctx args)
   (declare (ignore ctx))
-  (mk-number (to-string (- (object-value (car args))
-                           (object-value (cadr args))))))
+  (mk-number (to-string (- (object-value (maru-car args))
+                           (object-value (maru-cadr args))))))
 
 ; expr
-(defun maru-primitive-mul (ctx &rest args)
+(defun maru-primitive-mul (ctx args)
   (declare (ignore ctx))
-  (mk-number (to-string (* (object-value (car args))
-                           (object-value (cadr args))))))
+  (mk-number (to-string (* (object-value (maru-car args))
+                           (object-value (maru-cadr args))))))
 
 ; expr
-(defun maru-primitive-div (ctx &rest args)
+(defun maru-primitive-div (ctx args)
   (declare (ignore ctx))
-  (mk-number (to-string (floor (object-value (car args))
-                               (object-value (cadr args))))))
+  (mk-number (to-string (floor (object-value (maru-car args))
+                               (object-value (maru-cadr args))))))
 
 ; expr
-(defun maru-primitive-eq (ctx &rest args)
+(defun maru-primitive-eq (ctx args)
   (declare (ignore ctx))
-  (mk-bool (eq-object (car args) (cadr args))))
+  (mk-bool (eq-object (maru-car args) (maru-cadr args))))
 
 ; expr
-(defun maru-primitive-neq (ctx &rest args)
+(defun maru-primitive-neq (ctx args)
   (declare (ignore ctx))
-  (maru-boolean-cmp (car args) (cadr args) #'/=))
+  (maru-boolean-cmp (maru-car args) (maru-cadr args) #'/=))
 
 ; expr
-(defun maru-primitive-lt (ctx &rest args)
+(defun maru-primitive-lt (ctx args)
   (declare (ignore ctx))
-  (maru-boolean-cmp (car args) (cadr args) #'<))
+  (maru-boolean-cmp (maru-car args) (maru-cadr args) #'<))
 
 ; expr
-(defun maru-primitive-lte (ctx &rest args)
+(defun maru-primitive-lte (ctx args)
   (declare (ignore ctx))
-  (maru-boolean-cmp (car args) (cadr args) #'<=))
+  (maru-boolean-cmp (maru-car args) (maru-cadr args) #'<=))
 
 ; expr
-(defun maru-primitive-gt (ctx &rest args)
+(defun maru-primitive-gt (ctx args)
   (declare (ignore ctx))
-  (maru-boolean-cmp (car args) (cadr args) #'>))
+  (maru-boolean-cmp (maru-car args) (maru-cadr args) #'>))
 
 ; expr
-(defun maru-primitive-gte (ctx &rest args)
+(defun maru-primitive-gte (ctx args)
   (declare (ignore ctx))
-  (maru-boolean-cmp (car args) (cadr args) #'>=))
+  (maru-boolean-cmp (maru-car args) (maru-cadr args) #'>=))
 
 ; form
 (defun maru-primitive-set (ctx &rest args)
@@ -802,6 +833,25 @@
     (pair-object-cdr pair))
   (:method ((pair nil-object))
     (maru-nil)))
+
+(defmethod maru-cadr (maru-list)
+  (maru-car (maru-cdr maru-list)))
+
+(defgeneric maru-length (pair)
+  (:method ((pair pair-object))
+    (1+ (maru-length (maru-cdr pair))))
+  (:method ((n nil-object))
+    (declare (ignore n))
+    0))
+
+;; FIXME: use defgeneric
+(defmethod maru-last ((pair pair-object) &optional (n 1))
+  (cond ((= n (maru-length pair)) pair)
+        (t (maru-last (maru-cdr pair) n))))
+
+(defmethod maru-last ((nl nil-object) &optional (n 1))
+  (declare (ignore n))
+  (maru-nil))
 
 ;;; NOTE: nil is not a pair
 (defclass nil-object (basic-object)
@@ -1026,14 +1076,14 @@
 
 (defmethod pass ((object basic-object)
                  (trasformer-name (eql 'eval))
-                 (args list))
+                 (args pair-object))
   (error (format nil "implement eval pass for ~A~%"
                  (type-of object))))
 
 ;; FIXME: implement
 (defmethod pass :around ((object basic-object)
                          (transformer-name (eql 'eval))
-                         (args list))
+                         (args pair-object))
   (let ((applicator (applicator-from-internal (type-of object))))
     (cond (applicator (error "call the applicator and pass args!"))
           (t (assert (next-method-p)) (call-next-method)))))
@@ -1062,7 +1112,7 @@
 ;;; OF-NOTE: forwarding
 (defmethod pass ((object symbol-object)
                  (transformer-name (eql 'eval))
-                 (args list))
+                 (args pair-object))
   (declare (special *ctx*))
   (let ((binding (maru-lookup *ctx* object)))
     (if binding
@@ -1084,10 +1134,10 @@
 
 (defmethod pass ((object expr-object)
                  (transformer-name (eql 'eval))
-                 (args list))
+                 (args pair-object))
   (declare (special *ctx*))
   (let ((fn (function-object-fn object)))
-    `(nil . ,(apply fn *ctx* args))))
+    `(nil . ,(tapply-with-context fn *ctx* args))))
 
 
 ;;;;;;;;;; fixed object ;;;;;;;;;;
@@ -1104,10 +1154,10 @@
 
 (defmethod pass ((object fixed-object)
                  (transformer-name (eql 'eval))
-                 (args list))
+                 (args pair-object))
   (declare (special *ctx*))
   (let ((fn (function-object-fn object)))
-    `(nil . ,(apply fn *ctx* args))))
+    `(nil . ,(tapply-with-context fn *ctx* args))))
 
 ;;;;;;;;;; runtime closure object ;;;;;;;;;;
 
@@ -1123,7 +1173,7 @@
 
 (defmethod pass ((object runtime-closure-object)
                  (transformer-name (eql 'eval))
-                 (args list))
+                 (args pair-object))
   (declare (special *ctx*))
   (let ((child-ctx nil)
         (eval-transformer (make-transformer :name 'eval)))
@@ -1141,6 +1191,23 @@
     `(nil . ,(transform eval-transformer
                         (cadr (runtime-closure-object-src object))
                         child-ctx))))
+
+;;;;;;;;;; runtime closure object ;;;;;;;;;;
+
+(defmethod inform ((object number-object)
+                   (transformer-name (eql 'eval))
+                   (whatami (eql 'arg)))
+  `(nil . ,object))
+
+(defmethod inform ((object number-object)
+                   (transformer-name (eql 'eval))
+                   (whatami (eql 'lead)))
+  (error "numbers shouldn't be lead!"))
+
+(defmethod pass ((object number-object)
+                 (transformer-name (eql 'eval))
+                 (args pair-object))
+  (error "numbers shouldn't be lead!"))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -1172,11 +1239,11 @@
 
 (defmethod pass ((object basic-object)
                  (trasformer-name (eql 'expand))
-                 (args list))
+                 (args pair-object))
   (declare (special *forwarding-symbol*))
   (if *forwarding-symbol*
-      `(nil . ,(cons *forwarding-symbol* args))
-      `(nil . ,(cons object args))))
+      `(nil . ,(tcons *forwarding-symbol* args))
+      `(nil . ,(tcons object args))))
 
 
 ;;;;;;;;;; symbol object ;;;;;;;;;;
@@ -1210,16 +1277,16 @@
 ;;; OF-NOTE: forwarding
 (defmethod pass ((object symbol-object)
                  (transformer-name (eql 'expand))
-                 (args list))
+                 (args pair-object))
   (declare (special *ctx* *forwarding-symbol*))
   (when *forwarding-symbol*
-    (return-from pass `(nil . ,(cons *forwarding-symbol* args))))
+    (return-from pass `(nil . ,(tcons *forwarding-symbol* args))))
   (let ((binding (maru-lookup *ctx* object)))
     (if binding
         (let ((*forwarding-symbol* object))
           (declare (special *forwarding-symbol*))
           (pass binding 'expand args))  ; must forward to actual form
-        `(nil . ,(cons object args)))))
+        `(nil . ,(tcons object args)))))
 
 
 ;;;;;;;;;; form object ;;;;;;;;;;
@@ -1236,7 +1303,7 @@
 
 (defmethod pass ((object form-object)
                  (transformer-name (eql 'expand))
-                 (args list))
+                 (args pair-object))
   (declare (special *ctx*))
   (let ((fn (function-object-fn object)))
     (typecase fn
@@ -1245,23 +1312,23 @@
 
 ;;;;;;;;;; list as lead ;;;;;;;;;;
 
-(defmethod inform ((list list)
+(defmethod inform ((list pair-object)
                    (transformer-name (eql 'expand))
                    (whatami (eql 'arg)))
   (error "should never be dispatched on list argument!"))
 
 ;; FIXME: do the right thing
-(defmethod inform ((list list)
+(defmethod inform ((list pair-object)
                    (transformer-name (eql 'expand))
                    (whatami (eql 'lead)))
   t)
 
 ;; FIXME: do the right thing
-(defmethod pass ((list list)
+(defmethod pass ((list pair-object)
                  (transformer-name (eql 'expand))
-                 (args list))
+                 (args pair-object))
   (declare (special *ctx*))
-  (cons nil (cons list args)))
+  (cons nil (tcons list args)))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -1489,14 +1556,13 @@
   (let ((ctx (maru-initialize))
         (src "(define a '(1 (2 3)))")
         (typed-expr
-          (list (mk-symbol "define") (mk-symbol "a")
-                (list (mk-symbol "quote")
-                      (mk-list
-                        (mk-number "1")
-                        (mk-list (mk-number "2")
-                                 (mk-number "3")))))))
-    (eq-tree (type-expr ctx src) typed-expr
-             :test #'eq-object)))
+          (mk-list (mk-symbol "define") (mk-symbol "a")
+                   (mk-list (mk-symbol "quote")
+                            (mk-list
+                              (mk-number "1")
+                              (mk-list (mk-number "2")
+                                       (mk-number "3")))))))
+    (eq-object typed-expr (type-expr ctx src))))
 
 (deftest test-maru-intern
   (let* ((ctx (maru-mk-ctx))
@@ -1593,16 +1659,17 @@
                  :test #'eq-object))))
 
 (deftest test-maru-primitive-cons
-  (let* ((ctx (maru-initialize))
-         (a (mk-string :value "this"))
-         (b (mk-number "200"))
-         (out nil))
-    (setf out
-          (funcall (function-object-fn
-                     (maru-lookup ctx (maru-intern ctx "cons")))
-                   ctx a b))
-    (and (eq-object a (maru-car out))
-         (eq-object b (maru-cdr out)))))
+  (let-sugar (maru-tfuncs)
+    (let* ((ctx (maru-initialize))
+           (a (mk-string :value "this"))
+           (b (mk-number "200"))
+           (out nil))
+      (setf out
+            (funcall (function-object-fn
+                       (maru-lookup ctx (maru-intern ctx "cons")))
+                     ctx (mk-list a b)))
+      (and (eq-object a (maru-car out))
+           (eq-object b (maru-cdr out))))))
 
 (deftest test-maru-eval-transform-simple
   (let* ((ctx (maru-initialize))
@@ -1613,9 +1680,12 @@
          (type-transformer (make-transformer :name 'type))
          (typed-expr (transform type-transformer untyped-expr ctx))
          (out nil))
-    (setf out (transform eval-transformer typed-expr ctx))
-    (and (eq-object (maru-car out) (mk-string :value "kewl"))
-         (eq-object (maru-cdr out) (mk-number "22")))))
+    (setf out (transform eval-transformer
+                         typed-expr
+                         ctx
+                         :tfuncs (maru-tfuncs)))
+    (eq-object (mk-pair (mk-string :value "kewl") (mk-number "22"))
+               out)))
 
 (deftest test-maru-eval-transform-simple-bindings
   (let* ((ctx (maru-initialize))
@@ -1629,7 +1699,10 @@
          (out nil))
     (maru-define ctx (mk-symbol "yessuh") (mk-number "100"))
     (maru-define ctx (mk-symbol "kewl") (mk-string :value "astronauts"))
-    (setf out (transform eval-transformer typed-expr ctx))
+    (setf out (transform eval-transformer
+                         typed-expr
+                         ctx
+                         :tfuncs (maru-tfuncs)))
     (and (eq-object (maru-car out)  (mk-string :value "astronauts"))
          (eq-object (maru-car (maru-cdr out)) (mk-number "100"))
          (eq-object (maru-cdr (maru-cdr out)) (mk-number "22")))))
@@ -1669,9 +1742,15 @@
         (expanded-expr nil)
         (evald-expr nil))
     (setf expanded-expr
-          (transform expand-transformer typed-expr ctx))
+          (transform expand-transformer
+                     typed-expr
+                     ctx
+                     :tfuncs (maru-tfuncs)))
     (setf evald-expr
-          (transform eval-transformer expanded-expr ctx))
+          (transform eval-transformer
+                     expanded-expr
+                     ctx
+                     :tfuncs (maru-tfuncs)))
     ; (when (atom expanded-expr)
         ; (format t "EXPAND: ~A~%" (maru-printable-object expanded-expr))
         ; (format t "EVALD : ~A~%" (maru-printable-object evald-expr)))
@@ -1683,31 +1762,44 @@
          (eval-transformer (make-transformer :name 'eval))
          (typed-expr (type-expr ctx "(if 100 200 300)")))
     (eq-object (mk-number "200")
-               (transform eval-transformer typed-expr ctx))))
+               (transform eval-transformer
+                          typed-expr
+                          ctx
+                          :tfuncs (maru-tfuncs)))))
 
 (deftest test-maru-primitive-and
   (let ((ctx (maru-initialize)))
+    (declare (special *ctx* *tfuncs*))
+    (setf *ctx* ctx)
+    ; (setf *tfuncs* (maru-tfuncs))
+    ;; FIXME: why does this require std-tfuncs?
+    (setf *tfuncs* (std-tfuncs))
     (and (eq-object (mk-string :value "last")
                     (funcall (function-object-fn
                                (maru-lookup ctx (mk-symbol "and")))
                              ctx
-                             (mk-string :value "first")
-                             (mk-string :value "second")
-                             (mk-string :value "last")))
+                             (mk-list
+                               (mk-string :value "first")
+                               (mk-string :value "second")
+                               (mk-string :value "last"))))
          (maru-nil? (funcall (function-object-fn
                                (maru-lookup ctx (mk-symbol "and")))
                              ctx
-                             (mk-string :value "first")
-                             (mk-string :value "second")
-                             (mk-string :value "third")
-                             (maru-nil))))))
+                             (mk-list
+                               (mk-string :value "first")
+                               (mk-string :value "second")
+                               (mk-string :value "third")
+                               (maru-nil)))))))
 
 (deftest test-maru-eval-with-form
   (let* ((ctx (maru-initialize))
          (expand-transformer (make-transformer :name 'eval))
          (typed-expr (type-expr ctx "(and 1 2 3 20)")))
     (eq-object (mk-number "20")
-               (transform expand-transformer typed-expr ctx))))
+               (transform expand-transformer
+                          typed-expr
+                          ctx
+                          :tfuncs (maru-tfuncs)))))
 
 (deftest test-maru-simple-expand-and-eval
   (let* ((ctx (maru-initialize))
@@ -1743,7 +1835,10 @@
          (typed-expr (type-expr ctx "(define a \"some-value\")"))
          (def-sym (mk-symbol "define"))
          (a-sym (mk-symbol "a"))
-         (expanded-expr (transform expand-transformer typed-expr ctx)))
+         (expanded-expr (transform expand-transformer
+                                   typed-expr
+                                   ctx
+                                   :tfuncs (maru-tfuncs))))
     (declare (ignore expanded-expr))
          ; did we add 'define' successfully?
     (and (member def-sym (maru-context-symbols ctx) :test #'eq-object)
@@ -1780,6 +1875,7 @@
                                    (cons (>= a 4)
                                          (cons (<= a 4)
                                                (!= a 55)))))))"))
+    (format t "~A~%" (maru-printable-object (maru-all-transforms ctx src)))
     (eq-object (mk-pair (mk-bool t)
                         (mk-pair (mk-bool nil)
                                  (mk-pair (mk-bool nil)
@@ -2396,4 +2492,19 @@
                                  (mk-pair (mk-number "50")
                                           (maru-nil))))
                (maru-all-transforms ctx use-it))))
+
+(deftest test-list-conversion
+  (let ((list '(1 2 (3 4) (5 6) 7 8))
+        (maru-list (mk-list (mk-number "1")
+                            (mk-number "2")
+                            (mk-list (mk-number "9")
+                                     (mk-number "0"))
+                            (mk-list (mk-list (mk-number "2"))
+                                     (mk-number "0")))))
+    (and (equal (maru-list-to-internal-list
+                  (internal-list-to-maru-list list))
+                list)
+         (eq-object (internal-list-to-maru-list
+                      (maru-list-to-internal-list maru-list))
+                    maru-list))))
 
