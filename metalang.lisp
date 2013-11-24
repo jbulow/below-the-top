@@ -233,15 +233,12 @@
 (defsugar tatom)
 (defsugar tlistp)
 
-(defun std-nil ()
-  nil)
-
 (defun std-tfuncs ()
   (make-tfuncs :car   #'car
                :cdr   #'cdr
                :cons  #'cons
                :null  #'null
-               :nil   #'std-nil
+               :nil   #'(lambda () nil)
                :atom  #'atom
                :listp #'listp))
 
@@ -250,9 +247,14 @@
         (t (1+ (tlength (tcdr tlist))))))
 
 (defun tmapcar (fn tlist)
+  (assert (tlistp tlist))
   (cond ((tnull tlist) (tnil))
         (t (tcons (funcall fn (tcar tlist))
                   (tmapcar fn (tcdr tlist))))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;    transformation
+;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;; this function should never be used if the args are still internal typed
 (defun tapply-with-context (fn ctx args)
@@ -559,7 +561,7 @@
 ;;;      maru primitives
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-; expr
+; fixed
 (defun maru-primitive-quote (ctx args)
   (declare (ignore ctx))
   (assert (= 1 (maru-length args)))
@@ -582,7 +584,7 @@
 ; expr
 (defun maru-primitive-cons (ctx args)
   (declare (ignore ctx))
-  (assert (= 2 (tlength args)))
+  (assert (= 2 (maru-length args)))
   (mk-pair (maru-car args)
            (maru-cadr args)))
 
@@ -2575,4 +2577,28 @@
          (eq-object (internal-list-to-maru-list
                       (maru-list-to-internal-list maru-list))
                     maru-list))))
+
+(deftest test-maru-list-pair-sanity
+       ;; nil and pairs are lists
+  (and (maru-list? (maru-nil))
+       (maru-list? (mk-pair (mk-number "3") (mk-number "4")))
+       (maru-list? (mk-list (mk-number "5") (mk-number "5")))
+       ;; other things are not lists
+       (not (maru-list? (mk-number "12")))
+       (not (maru-list? (make-instance 'basic-object)))
+       ;; everything other than pairs are atoms
+       (maru-atom? (maru-nil))
+       (maru-atom? (mk-number "4"))
+       (maru-atom? (mk-string :value "whatever"))
+       (not (maru-atom? (mk-list (mk-number "4"))))
+       (not (maru-atom? (mk-pair (mk-number "9") (mk-number "10"))))))
+
+(deftest test-maru-nil-sanity
+       ;; only nil is nil
+  (and (maru-nil? (maru-nil))
+       ;; nil is the empty list
+       (maru-nil? (mk-list))
+       (not (maru-nil? (mk-list "this" "that")))
+       (not (maru-nil? (mk-pair (mk-number "2") (mk-number "9"))))
+       (not (maru-nil? (mk-pair (maru-nil) (maru-nil))))))
 
