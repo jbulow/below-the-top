@@ -296,6 +296,10 @@
     (let ((*ctx* ctx)
           (*tfuncs* tfuncs))    ; necessary for recursive calls
       (declare (special *ctx* *tfuncs*))
+      ;; assume the improper lists are data and do not attempt
+      ;; transformation
+      (when (not (proper? expr))
+        (return-from transform expr))
       (cond ((tnull expr) (tnil))
             ((tatom expr)
              (back-talk-arg transformer expr))
@@ -1010,7 +1014,7 @@
 
 ;;; sexpr : should be a (possibly nested) list of string literals
 (defun untype-everything (sexpr)
-  (tree-map #'(lambda (string) (mk-untyped string)) sexpr))
+  (rude-tree-map #'(lambda (string) (mk-untyped string)) sexpr))
 
 (defun type-it (ctx object)
   (let* ((val (object-value object))
@@ -2601,4 +2605,19 @@
        (not (maru-nil? (mk-list "this" "that")))
        (not (maru-nil? (mk-pair (mk-number "2") (mk-number "9"))))
        (not (maru-nil? (mk-pair (maru-nil) (maru-nil))))))
+
+(deftest test-noop-transform-improper-list
+  (let ((noop-transformer (make-transformer :name 'noop))
+        (untyped-expr (untype-everything
+                        (tokenize
+                          (next-char-factory "'(1 (2 . 3))")
+                          '((#\' . quote-handler))))))
+    (and (rude-eq-tree `(,(mk-untyped "quote")
+                         (,(mk-untyped "1")
+                           (,(mk-untyped "2") . ,(mk-untyped "3"))))
+                        untyped-expr
+                        :test #'eq-object)
+         (rude-eq-tree (transform noop-transformer untyped-expr nil)
+                       untyped-expr
+                       :test #'eq-object))))
 
