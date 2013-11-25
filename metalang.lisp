@@ -2587,14 +2587,14 @@
          (eq-object (mk-number "9")
                     (maru-all-transforms ctx use-it-1)))))
 
-;; FIXME: there are definitely cases where we do not handle multiple
-;; quasiquotes + unquotes correclty; 
+;; FIXME: macro expansion is broken
 (deftest test-maru-quasiquote-2
   (let ((ctx (maru-initialize))
         (src (quasiquote-src))
         (use-it "``5"))
     (maru-all-transforms ctx src)
-    (eq-object (mk-list (mk-symbol "quote") (mk-number "5"))
+    (eq-object (mk-list (mk-symbol "quasiquote")
+                        (mk-number "5"))
                (maru-all-transforms ctx use-it))))
 
 (deftest test-maru-closure-context
@@ -2748,7 +2748,6 @@
     (maru-all-transforms ctx src1)
     (eq-object (mk-number "16")
                (maru-all-transforms ctx src2))))
-
 
 (deftest test-list-conversion
   (let ((maru-list-0 (mk-list (mk-number "1") (mk-number "2")
