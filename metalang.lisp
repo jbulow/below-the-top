@@ -1404,20 +1404,17 @@
   (error "form-objectz should not be arguments! ~A"
          (maru-printable-object *forwarding-symbol*)))
 
+;; do not expand a macros arguments behind it's back
 (defmethod inform ((object form-object)
                    (transformer-name (eql 'expand))
                    (whatami (eql 'lead)))
   (declare (special *forwarding-object*))
-  (not (eq-object (mk-symbol "quote") *forwarding-symbol*)))
+  nil)
 
 (defmethod pass ((object form-object)
                  (transformer-name (eql 'expand))
                  (args list-object))
   (declare (special *ctx* *tfuncs*))
-  ;; hack
-  (when (eq-object (mk-symbol "quote")
-                   *forwarding-symbol*)
-    (return-from pass `(nil . ,(mk-pair object args))))
   (let* ((fn (function-object-fn object))
          (fn-ctx nil)
          (expansion
@@ -1458,6 +1455,17 @@
                  (args list-object))
   (declare (special *ctx*))
   (cons nil (tcons list args)))
+
+;;;;;;;;;; fixed lead ;;;;;;;;;;
+
+(defmethod inform ((object fixed-object)
+                   (transformer-name (eql 'expand))
+                   (whatami (eql 'lead)))
+  (declare (special *forwarding-symbol*))
+  ;; HACK.
+  (if *forwarding-symbol*
+    (not (eq-object (mk-symbol "quote") *forwarding-symbol*))
+    t))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -2593,8 +2601,21 @@
         (src (quasiquote-src))
         (use-it "``5"))
     (maru-all-transforms ctx src)
-    (eq-object (mk-list (mk-symbol "quasiquote")
-                        (mk-number "5"))
+    (eq-object (mk-list (mk-symbol "quasiquote") (mk-number "5"))
+               (maru-all-transforms ctx use-it))))
+
+(deftest test-maru-quasiquote-3
+  (let ((ctx (maru-initialize))
+        (src (quasiquote-src))
+        (use-it "`,@('thing 1 2 3)"))
+    (maru-all-transforms ctx src)
+    (eq-object (mk-list (mk-symbol "unquote-splicing")
+                        (mk-list (mk-list
+                                   (mk-symbol "quote")
+                                   (mk-symbol "thing"))
+                                 (mk-number "1")
+                                 (mk-number "2")
+                                 (mk-number "3")))
                (maru-all-transforms ctx use-it))))
 
 (deftest test-maru-closure-context
@@ -2732,6 +2753,7 @@
     (eq-object (mk-bool t)
                (maru-all-transforms ctx src2))))
 
+;; this is not supported by imaru quasiquote
 (deftest test-macros-4
   (let ((ctx (maru-initialize))
         (src0 "(define m
@@ -2743,11 +2765,15 @@
                             `(+ ,,b (+ ,c ,d))))))))")
         (src1 "(m electrifying 5)")
         (src2 "(electrifying 2 9)"))
+    (declare (ignore ctx src0 src1 src2))))
+#|
+    nil))
     (maru-all-transforms ctx (quasiquote-src))
     (maru-all-transforms ctx src0)
     (maru-all-transforms ctx src1)
     (eq-object (mk-number "16")
                (maru-all-transforms ctx src2))))
+|#
 
 (deftest test-list-conversion
   (let ((maru-list-0 (mk-list (mk-number "1") (mk-number "2")
@@ -2813,15 +2839,47 @@
                          untyped-expr
                          :test #'eq-object)))))
 
+;; fixme
 (deftest test-noop-transform-improper-list-2
   (let-sugar (maru-tfuncs)
     (let* ((ctx (maru-initialize))
            (noop-transformer (make-transformer :name 'type))
            (src "(block
-                   (define define-form (form (lambda (name args . body)
-                     `(define ,name (form (lambda ,args ,@body)))))))")
+                   (define define-form
+                     (form
+                       (lambda (name args . body)
+                         `(define ,name
+                            (form (lambda ,args ,@body)))))))")
            (untyped-expr (untype-expr src)))
-      (transform noop-transformer untyped-expr ctx))))
+      (eq-object
+        (mk-list
+          (mk-symbol "block")
+          (mk-list
+            (mk-symbol "define")
+            (mk-symbol "define-form")
+            (mk-list
+              (mk-symbol "form")
+              (mk-list
+                (mk-symbol "lambda")
+                (mk-pair
+                  (mk-symbol "name")
+                  (mk-pair
+                    (mk-symbol "args")
+                    (mk-symbol "body")))
+                (mk-list
+                  (mk-symbol "quasiquote")
+                  (mk-list
+                    (mk-symbol "define")
+                    (mk-list (mk-symbol "unquote") (mk-symbol "name"))
+                    (mk-list
+                      (mk-symbol "form")
+                        (mk-list
+                          (mk-symbol "lambda")
+                          (mk-list (mk-symbol "unquote")
+                                   (mk-symbol "args"))
+                          (mk-list (mk-symbol "unquote-splicing")
+                                   (mk-symbol "body"))))))))))
+        (transform noop-transformer untyped-expr ctx)))))
 
 (deftest test-maru-proper?
   (and (maru-proper? (mk-pair (mk-number "1") (maru-nil)))
