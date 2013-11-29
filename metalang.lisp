@@ -16,6 +16,8 @@
 ;;;; > write macros to cleanup maru initialization
 ;;;;   + arithmetic
 ;;;; > *applicators*, *expanders*
+;;;; > array and list comparison can't use eq-object behind ``='' as the
+;;;;   test needs to determine if they are the same object
 ;;;;
 ;;;; NOTES
 ;;;; . forwarding dispatches to symbol objects (because things that
@@ -544,6 +546,11 @@
 
     (maru-define ctx (maru-intern ctx "form")
                      (mk-expr #'maru-primitive-form))
+    ;; arrays
+    (maru-define ctx (maru-intern ctx "array")
+                     (mk-expr #'maru-primitive-array))
+    (maru-define ctx (maru-intern ctx "set-array-at")
+                     (mk-expr #'maru-primitive-set-array-at))
 
     ;; compositioners
     (maru-define ctx (maru-intern ctx "*expanders*") (mk-array 32))
@@ -836,6 +843,33 @@
                (typep (maru-car args) 'runtime-closure-object)))
   (mk-form (maru-car args)))
 
+; expr
+(defun maru-primitive-array (ctx args)
+  (declare (ignore ctx))
+  (assert (and (= 1 (maru-length args))
+               (typep (maru-car args) 'number-object)))
+  (mk-array (object-value (maru-car args))))
+
+; expr
+; FIXME: do resize
+(defun maru-primitive-set-array-at (ctx args)
+  (declare (ignore ctx))
+  (assert (and (= 3 (maru-length args))
+               (typep (maru-car args) 'array-object)
+               (typep (maru-cadr args) 'number-object)))
+  (let ((index (object-value (maru-cadr args))))
+    ;; handle array resizing
+    ;; > FIXME: maybe should use fill pointer + vector-push-extend
+    (when (>= index (length (array-object-elements (maru-car args))))
+        (let ((arr (array-object-elements (maru-car args))))
+          (setf (array-object-elements (maru-car args))
+                (init-vector (1+ index) :initial-element (maru-nil)))
+          (copy-vector (array-object-elements (maru-car args))
+                       arr)))
+    (setf (svref (array-object-elements (maru-car args))
+                  (object-value (maru-cadr args)))
+          (maru-caddr args))))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;  maru type transformer
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -976,8 +1010,17 @@
   ((elements :accessor array-object-elements
              :initarg  :elements)))
 
-(defun mk-array (size)
-  (make-instance 'array-object :elements (make-array size)))
+(defun maru-list-onto-array (list array &key (index 0))
+  (cond ((= index (length list)) array)
+        ((> index (length list)) (error "bad index"))
+        ((> index (length array)) (error "array too small"))
+        (t (setf (aref array index) (nth index list))
+           (maru-list-onto-array list array :index (1+ index)))))
+
+(defun mk-array (size &rest elements)
+  (make-instance 'array-object
+    :elements (maru-list-onto-array
+                elements (make-array size :initial-element (maru-nil)))))
 
 (defclass runtime-closure-object (basic-object)
   ((src :accessor runtime-closure-object-src
@@ -1035,6 +1078,9 @@
     (null (object-value rhs)))
   (:method ((lhs bool-object) (rhs nil-object))
     (null (object-value lhs)))
+  (:method ((lhs array-object) (rhs array-object))
+    (eq-vector (array-object-elements lhs) (array-object-elements rhs)
+               :test #'eq-object))
   ;; catch all
   (:method (lhs rhs)
     nil))
@@ -2525,6 +2571,36 @@
                         (mk-string :value "five"))
                (maru-all-transforms ctx src))))
 
+(deftest test-maru-array-primitive
+  (let ((ctx (maru-initialize))
+        (src "(array 5)"))
+    (eq-object (mk-array 5)
+               (maru-all-transforms ctx src))))
+
+(deftest test-maru-set-array-at-primitive
+  (let ((ctx (maru-initialize))
+        (src "(block
+                (define a (array 5))
+                (set-array-at a 2 3))")
+        (use-it "(block a)"))
+    (and (eq-object (mk-number "3")
+                    (maru-all-transforms ctx src))
+         (eq-object (mk-array 5 (maru-nil) (maru-nil) (mk-number "3")
+                                (maru-nil) (maru-nil))
+                    (maru-all-transforms ctx use-it)))))
+
+(deftest test-maru-array-auto-resizing
+  "arrays automatically resize when an out of bounds index is set"
+  (let ((ctx (maru-initialize))
+        (src "(block
+                (define a (array 2))
+                (set-array-at a 4 'twelve))")
+        (use-it "(block a)"))
+    (maru-all-transforms ctx src)
+    (and (eq-object (mk-array 5 (maru-nil) (maru-nil) (maru-nil)
+                                (maru-nil) (mk-symbol "twelve"))
+                    (maru-all-transforms ctx use-it)))))
+
 ;; for testing
 (defun quasiquote-src ()
   "(block
@@ -2637,6 +2713,26 @@
                                  (mk-number "1")
                                  (mk-number "2")
                                  (mk-number "3")))
+               (maru-all-transforms ctx use-it))))
+
+(deftest test-maru-%list->array
+  (let ((ctx (maru-initialize))
+        (src "(define %list->array
+                (lambda (list index)
+                  (if (pair? list)
+                      (let ((a (%list->array (cdr list) (+ 1 index))))
+                        (set-array-at a index (car list))
+                        a)
+                      (array index))))")
+        (use-it "(block
+                   (define l '(1 2 3 (4) 5))
+                   (%list->array l 0))"))
+    (maru-all-transforms ctx src)
+    (eq-object (mk-array 5 (mk-number "1")
+                           (mk-number "2")
+                           (mk-number "3")
+                           (mk-list (mk-number "4"))
+                           (mk-number "5"))
                (maru-all-transforms ctx use-it))))
 
 (deftest test-maru-closure-context
