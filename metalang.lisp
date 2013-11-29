@@ -601,13 +601,14 @@
 ; fixed
 (defun maru-primitive-if (ctx args)
   (declare (ignore ctx))
-  (assert (= 3 (maru-length args)))
+  (assert (member (maru-length args) '(2 3)))
   (let ((test (maru-car  args))
         (then (maru-cadr args))
-        (else (maru-cdr  (maru-cdr args))))
+        (else (maru-cddr args)))
     (if (not (maru-nil? (nice-eval test)))
         (nice-eval then)
-        (let ((out nil))
+        ;; return ``maru-nil'' if there is no else clause
+        (let ((out (maru-nil)))
           ; implicit block
           (dolist (e (maru-list-to-internal-list-1 else) out)
             (setf out (nice-eval e)))))))
@@ -891,6 +892,9 @@
 
 (defmethod maru-cadr (maru-list)
   (maru-car (maru-cdr maru-list)))
+
+(defmethod maru-cddr (maru-list)
+  (maru-cdr (maru-cdr maru-list)))
 
 (defmethod maru-caar (maru-list)
   (maru-car (maru-car maru-list)))
@@ -2072,6 +2076,12 @@
          (eq-object (mk-number "40")
                     (maru-all-transforms ctx "(fn 2 (fn 3 4))")))))
 
+(deftest test-maru-primitive-if-empty-else
+  (let ((ctx (maru-initialize))
+        (src "(if () 10)"))
+    (eq-object (maru-nil)
+               (maru-all-transforms ctx src))))
+
 (deftest test-maru-pass-scalar-to-lambda
   (let* ((ctx (maru-initialize))
          (src0 "(define a 100)")
@@ -2515,36 +2525,6 @@
                         (mk-string :value "five"))
                (maru-all-transforms ctx src))))
 
-(deftest test-maru-define-form
-  (let ((ctx (maru-initialize))
-        (qq-src (quasiquote-src))
-        (src0 "(define define-form
-                 (form
-                   (lambda (name args . body)
-                     `(define ,name (form (lambda ,args ,@body))))))")
-        (src1 "(define-form define-function (name args . body)
-                  `(define ,name (lambda ,args ,@body))))")
-        (src2 "(define-function list-length (list)
-                (if (pair? list)
-                    (+ 1 (list-length (cdr list)))
-                    0))")
-        (use-it "(cons (list-length '()) (list-length '(0 1 2 3)))"))
-    (maru-all-transforms ctx qq-src)
-    (maru-all-transforms ctx src0)
-    (maru-all-transforms ctx src1)
-    (maru-all-transforms ctx src2)
-    (eq-object (mk-pair (mk-number "0") (mk-number "4"))
-               (maru-all-transforms ctx use-it))))
-
-(deftest test-maru-map
-  (let ((ctx (maru-initialize))
-        (src "(define-function map (function list)
-                (if (pair? list)
-                    (let ((head (function (car list))))
-                  (cons head (map function (cdr list))))))"))
-    (declare (ignore ctx src))
-    nil))
-
 ;; for testing
 (defun quasiquote-src ()
   "(block
@@ -2580,6 +2560,47 @@
                                 (list 'quote object))))
            (lambda (expr)
              (qq-object expr))))))")
+
+(defun define-function-src ()
+  '("(define define-form
+       (form
+         (lambda (name args . body)
+           `(define ,name (form (lambda ,args ,@body))))))"
+    "(define-form define-function (name args . body)
+       `(define ,name (lambda ,args ,@body)))"
+    "(define-function list-length (list)
+       (if (pair? list)
+         (+ 1 (list-length (cdr list)))
+         0))"))
+
+(deftest test-maru-define-form
+  (let ((ctx (maru-initialize))
+        (qq-src (quasiquote-src))
+        (def-src (define-function-src))
+        (use-it "(cons (list-length '()) (list-length '(0 1 2 3)))"))
+    (maru-all-transforms ctx qq-src)
+    (dolist (d def-src)
+      (maru-all-transforms ctx d))
+    (eq-object (mk-pair (mk-number "0") (mk-number "4"))
+               (maru-all-transforms ctx use-it))))
+
+(deftest test-maru-map
+  (let ((ctx (maru-initialize))
+        (qq-src (quasiquote-src))
+        (def-src (define-function-src))
+        (src "(define-function map (function list)
+                (if (pair? list)
+                    (let ((head (function (car list))))
+                      (cons head (map function (cdr list))))))")
+        (use-it "(block
+                   (define f (lambda (a) (+ 1 a)))
+                   (map f '(1 2 3)))"))
+    (maru-all-transforms ctx qq-src)
+    (dolist (d def-src)
+      (maru-all-transforms ctx d))
+    (maru-all-transforms ctx src)
+    (eq-object (mk-list (mk-number "2") (mk-number "3") (mk-number "4"))
+               (maru-all-transforms ctx use-it))))
 
 ;; FIXME: this seems to be close; but not quite right, hard to test
 (deftest test-maru-quasiquote
