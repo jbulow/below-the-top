@@ -555,6 +555,8 @@
     ;; arrays
     (maru-define ctx (maru-intern ctx "array")
                      (mk-expr #'maru-primitive-array))
+    (maru-define ctx (maru-intern ctx "array-at")
+                     (mk-expr #'maru-primitive-array-at))
     (maru-define ctx (maru-intern ctx "set-array-at")
                      (mk-expr #'maru-primitive-set-array-at))
 
@@ -876,6 +878,18 @@
   (assert (and (= 1 (maru-length args))
                (typep (maru-car args) 'number-object)))
   (mk-array (object-value (maru-car args))))
+
+; expr
+(defun maru-primitive-array-at (ctx args)
+  (declare (ignore ctx))
+  (assert (and (= 2 (maru-length args))
+               (typep (maru-car args) 'array-object)
+               (typep (maru-cadr args) 'number-object)))
+  (let ((arr (array-object-elements (maru-car args)))
+        (index (object-value (maru-cadr args))))
+    (if (>= index (length arr))
+        nil ; return nil if out of bounds
+        (svref arr index))))
 
 ; expr
 (defun maru-primitive-set-array-at (ctx args)
@@ -2636,6 +2650,15 @@
     (and (eq-object (mk-array 5 (maru-nil) (maru-nil) (maru-nil)
                                 (maru-nil) (mk-symbol "twelve"))
                     (maru-all-transforms ctx use-it)))))
+
+(deftest test-maru-array-at-primitive
+  (let ((ctx (maru-initialize))
+        (src "(block
+                (define a (array 5))
+                (set-array-at a 3 'sunshine)
+                (array-at a 3))"))
+    (eq-object (mk-symbol "sunshine")
+               (maru-all-transforms ctx src))))
 
 ;; for testing
 (defun quasiquote-src ()
