@@ -1152,7 +1152,11 @@
          (first-char (char val 0)))
     (cond ((char= #\" first-char)                   ; string
            (mk-string :value (subseq val 1 (1- len))))
-          ((digit-char-p first-char)
+          ((or (digit-char-p first-char)
+               ;; account for negative numbers
+               (and (char= #\- first-char)
+                    (> (length val) 1)
+                    (digit-char-p (char val 1))))
              (if (and (>= len 2) (char-equal #\x (char val 1)))
                (progn
                  (assert (> len 2))
@@ -2802,11 +2806,13 @@
   (let ((ctx (maru-initialize))
         (qq-src (quasiquote-src))
         (def-src (define-function-src))
-        (cs-src (concat-string-src)))
+        (cs-src (concat-string-src))
+        (ll-src (list-length-src)))
     (maru-all-transforms ctx qq-src)
     (dolist (d def-src)
       (maru-all-transforms ctx d))
     (maru-all-transforms ctx cs-src)
+    (maru-all-transforms ctx ll-src)
     ctx))
 
 (deftest test-maru-concat-symbol
@@ -2822,10 +2828,7 @@
                (maru-all-transforms ctx use-it))))
 
 (deftest test-maru-define-structure
-  (let ((ctx (maru-initialize))
-        (qq-src (quasiquote-src))
-        (def-src (define-function-src))
-        (ll-src (list-length-src))
+  (let ((ctx (maru-initialize+))
         ;; FIXME: macros need to be transformed in their own cycle
         (src "(block
                 (define %type-names (array 16))
@@ -2866,16 +2869,11 @@
                    (define l (new <lon>))
                    (set (<long>-_bits) 10)
                    (cons l (oop-at l 0))"))
-    (declare (ignore ctx qq-src def-src ll-src src long-struct use-it))
+    (declare (ignore ctx src long-struct use-it))
     nil))
-#|
-    (maru-all-transforms ctx qq-src)
-    (maru-all-transforms ctx def-src)
-    (maru-all-transforms ctx ll-src)
-    (maru-all-transforms ctx src)
-    (maru-all-transforms ctx long-struct)
-    (maru-all-transforms ctx use-it)))
-|#
+    ; (maru-all-transforms ctx src)
+    ; (maru-all-transforms ctx long-struct)
+    ; (maru-all-transforms ctx use-it)))
 
 (deftest test-maru-closure-context
   (let ((ctx (maru-initialize))
@@ -3147,3 +3145,9 @@
        (not (maru-proper? (mk-pair (mk-number "1")
                                    (mk-pair (mk-number "9")
                                             (mk-number "99")))))))
+
+(deftest test-negative-number-bug
+  (let ((ctx (maru-initialize))
+        (src "(define a -10)"))
+    (eq-object (mk-number "-10")
+               (maru-all-transforms ctx src))))
