@@ -32,6 +32,18 @@
 ;;;;   > the transformers use common lisp lists (and not maru lisps) to
 ;;;;     represent maru code. this means that 'quote' must do some type
 ;;;;     of runtime conversion into a maru list.
+;;;; . pseudoforms are currently a hack
+;;;;   > ``set'' should happen after expansion and before evaluation; so
+;;;;     it occurs in the 'pseudoexpand transformation
+;;;;   > the semantics are exactly the same as the 'expand transformation
+;;;;     except we want to deal with a seperate set of identifiers; the
+;;;;     ``pseudoexpanders''
+;;;;   > we can't make ``set'' a macro that we treat conditionally because
+;;;;     expansion doesn't end until all macros are expanded; so we never
+;;;;     make it out of vanilla expansion
+;;;;   > we also want to avoid duplicating expand semantics into pexpand
+;;;;     handlers; currently we use the *pseudoexpansion* identifier and
+;;;;     the form-helper function, not totally clean
 
 (proclaim '(optimize (debug 3)))
 
@@ -528,7 +540,7 @@
     (maru-define ctx (maru-intern ctx ">=")
                      (mk-expr #'maru-primitive-gte))
     (maru-define ctx (maru-intern ctx "set")
-                     (mk-form #'maru-primitive-set))
+                     (mk-pform #'maru-primitive-set))
     (maru-define ctx (maru-intern ctx "seth")
                      (mk-fixed #'maru-primitive-seth))
     (maru-define ctx (maru-intern ctx "pair?")
@@ -775,14 +787,15 @@
   (declare (ignore ctx))
   (maru-boolean-cmp (maru-car args) (maru-cadr args) #'>=))
 
-; form
+; pseudoform
 (defun maru-primitive-set (ctx args)
-  (declare (ignore ctx))
+  (declare (ignore ctx) (special *pseudoexpansion*))
+  (assert *pseudoexpansion*)
   (assert (= 2 (maru-length args)))
   (cond ((maru-list? (maru-car args))
-         (mk-pair (mk-symbol (scat "set-"
-                                   (object-value (maru-caar args))))
-                  (mk-pair (maru-cadar args) (maru-cdr args))))
+           (mk-pair (mk-symbol (scat "set-"
+                                 (object-value (maru-caar args))))
+                    (mk-pair (maru-cadar args) (maru-cdr args))))
         (t (mk-pair (mk-symbol "seth") args))))
 
 ; fixed
@@ -847,12 +860,12 @@
 ; expr
 ; > IDL: imaru implementation ignores extra args
 (defun maru-primitive-string->symbol (ctx args)
-  (declare (ignore ctx))
   (cond ((zerop (maru-length args)) (maru-nil))
         ((typep (maru-car args) 'symbol-object) (maru-car args))
         ((typep (maru-car args) 'string-object)
          ;; don't copy the null terminator
-         (maru-string-to-symbol (maru-car args)))
+         (maru-intern ctx (object-value
+                            (maru-string-to-symbol (maru-car args)))))
         (t (maru-nil))))
 
 ; expr
@@ -873,11 +886,15 @@
   (mk-form (maru-car args)))
 
 ; expr
+; array argument is optional; default to size 0
+; IDL: imaru will take any arguments to 'array'; if the first argument
+; isn't a long it will create a size 0 array
 (defun maru-primitive-array (ctx args)
   (declare (ignore ctx))
-  (assert (and (= 1 (maru-length args))
-               (typep (maru-car args) 'number-object)))
-  (mk-array (object-value (maru-car args))))
+  (assert (and (<= (maru-length args) 1)))
+  (if (zerop (maru-length args))
+      (mk-array 0)
+      (mk-array (object-value (maru-car args)))))
 
 ; expr
 (defun maru-primitive-array-at (ctx args)
@@ -1099,6 +1116,12 @@
 
 (defun mk-form (fn)
   (make-instance 'form-object :function fn))
+
+(defclass pseudoform-object (function-object)
+  ())
+
+(defun mk-pform (fn)
+  (make-instance 'pseudoform-object :function fn))
 
 (defgeneric eq-object (lhs rhs)
   (:method ((lhs single-value-object) (rhs single-value-object))
@@ -1416,6 +1439,42 @@
   (error "no expand passing at eval time"))
   ; `(nil . ,(mk-pair object args)))
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; maru pseudoexpansion transformer
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defparameter *pseudoexpansion* nil)
+
+(defmethod inform ((object basic-object)
+                   (transformer-name (eql 'pseudoexpand))
+                   (whatami (eql 'arg)))
+  (let ((*pseudoexpansion* t))
+    (declare (special *pseudoexpansion*))
+    (inform object 'expand whatami)))
+
+(defmethod inform ((object basic-object)
+                   (transformer-name (eql 'pseudoexpand))
+                   (whatami (eql 'lead)))
+  (let ((*pseudoexpansion* t))
+    (declare (special *pseudoexpansion*))
+    (inform object 'expand whatami)))
+
+(defmethod pass ((object basic-object)
+                 (trasformer-name (eql 'pseudoexpand))
+                 (args list-object))
+  (let ((*pseudoexpansion* t))
+    (declare (special *pseudoexpansion*))
+    (pass object 'expand args)))
+
+;;;;;;;;;;; pseudoform ;;;;;;;;;;;;;;
+
+(defmethod pass ((object pseudoform-object)
+                 (transformer-name (eql 'pseudoexpand))
+                 (args list-object))
+  (let ((*pseudoexpansion* t))
+    (declare (special *pseudoexpansion*))
+    (form-helper object transformer-name args)))
+
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;  maru expansion transformer
@@ -1488,11 +1547,14 @@
   (declare (special *ctx* *forwarding-symbol*))
   (when *forwarding-symbol*
     (return-from pass `(nil . ,(tcons *forwarding-symbol* args))))
-  (let ((binding (maru-lookup *ctx* object)))
+  (let ((binding (maru-lookup *ctx* object))
+        ;; HACK
+        (real-transformer-name
+          (if *pseudoexpansion* 'pseudoexpand transformer-name)))
     (if binding
         (let ((*forwarding-symbol* object))
           (declare (special *forwarding-symbol*))
-          (pass binding 'expand args))  ; must forward to actual form
+          (pass binding real-transformer-name args))
         `(nil . ,(tcons object args)))))
 
 
@@ -1512,9 +1574,7 @@
   (declare (special *forwarding-object*))
   nil)
 
-(defmethod pass ((object form-object)
-                 (transformer-name (eql 'expand))
-                 (args list-object))
+(defun form-helper (object transformer-name args)
   (declare (special *ctx* *tfuncs*))
   (let* ((fn (function-object-fn object))
          (fn-ctx nil)
@@ -1529,10 +1589,15 @@
              (t (error "unrecognized fn type")))))
     (let ((*forwarding-symbol* nil))
       (declare (special *forwarding-symbol*))
-      `(nil . ,(transform (make-transformer :name 'expand)
+      `(nil . ,(transform (make-transformer :name transformer-name)
                           expansion
                           fn-ctx
                           :tfuncs *tfuncs*)))))
+
+(defmethod pass ((object form-object)
+                 (transformer-name (eql 'expand))
+                 (args list-object))
+  (form-helper object transformer-name args))
 
 ;;;;;;;;;; list as lead ;;;;;;;;;;
 
@@ -2011,9 +2076,11 @@
 
 (defun maru-all-transforms (ctx src)
   (let ((expand-transformer (make-transformer :name 'expand))
+        (pseudoexpand-transformer (make-transformer :name 'pseudoexpand))
         (eval-transformer (make-transformer :name 'eval))
         (typed-expr (type-expr ctx src))
         (expanded-expr nil)
+        (pexpanded-expr nil)
         (evald-expr nil))
     ; (when (atom typed-expr)
         ; (format t "TYPED: ~A~%" (maru-printable-object typed-expr)))
@@ -2024,9 +2091,17 @@
                      :tfuncs (maru-tfuncs)))
     ; (when (atom expanded-expr)
         ; (format t "EXPAND: ~A~%" (maru-printable-object expanded-expr)))
+    (setf pexpanded-expr
+          (transform pseudoexpand-transformer
+                     expanded-expr
+                     ctx
+                     :tfuncs (maru-tfuncs)))
+    ; (when (atom expanded-expr)
+        ; (format t "PEXPAND: ~A~%"
+        ;           (maru-printable-object pexpanded-expr)))
     (setf evald-expr
           (transform eval-transformer
-                     expanded-expr
+                     pexpanded-expr
                      ctx
                      :tfuncs (maru-tfuncs)))
     ; (when (atom evald-expr)
@@ -2631,6 +2706,12 @@
     (eq-object (mk-array 5)
                (maru-all-transforms ctx src))))
 
+(deftest test-maru-array-primitive-default-bug
+  (let ((ctx (maru-initialize))
+        (src "(array)"))
+    (eq-object (mk-array 0)
+               (maru-all-transforms ctx src))))
+
 (deftest test-maru-set-array-at-primitive
   (let ((ctx (maru-initialize))
         (src "(block
@@ -2802,30 +2883,41 @@
                            (mk-number "5"))
                (maru-all-transforms ctx use-it))))
 
+(defun concat-symbol-src ()
+  "(define concat-symbol
+     (lambda (x y)
+       (string->symbol
+         (concat-string (symbol->string x)
+                        (symbol->string y)))))")
+
 (defun maru-initialize+ ()
   (let ((ctx (maru-initialize))
         (qq-src (quasiquote-src))
         (def-src (define-function-src))
         (cs-src (concat-string-src))
-        (ll-src (list-length-src)))
+        (ll-src (list-length-src))
+        (csym-src (concat-symbol-src)))
     (maru-all-transforms ctx qq-src)
     (dolist (d def-src)
       (maru-all-transforms ctx d))
     (maru-all-transforms ctx cs-src)
     (maru-all-transforms ctx ll-src)
+    (maru-all-transforms ctx csym-src)
     ctx))
 
 (deftest test-maru-concat-symbol
   (let ((ctx (maru-initialize+))
-        (src "(define concat-symbol
-                (lambda (x y)
-                  (string->symbol
-                    (concat-string (symbol->string x)
-                                   (symbol->string y)))))")
         (use-it "(concat-symbol 'hello 'world)"))
-    (maru-all-transforms ctx src)
     (eq-object (mk-symbol "helloworld")
                (maru-all-transforms ctx use-it))))
+
+(deftest test-maru-string->symbol-primitive-intern-bug
+  "string->symbol must intern the new symbol"
+  (let ((ctx (maru-initialize))
+        (src "(string->symbol \"y2k\")"))
+    (maru-all-transforms ctx src)
+    (member (mk-symbol "y2k") (maru-context-symbols ctx)
+            :test #'eq-object)))
 
 (deftest test-maru-define-structure
   (let ((ctx (maru-initialize+))
@@ -2866,9 +2958,9 @@
                   (allocate type (array-at %structure-sizes type))))")
         (long-struct "(define-structure <long>    (_bits))")
         (use-it "(block
-                   (define l (new <lon>))
-                   (set (<long>-_bits) 10)
-                   (cons l (oop-at l 0))"))
+                   (define l (new <long>))
+                   (set (<long>-_bits l) 10)
+                   (cons l (oop-at l 0)))"))
     (declare (ignore ctx src long-struct use-it))
     nil))
     ; (maru-all-transforms ctx src)
