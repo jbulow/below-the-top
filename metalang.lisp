@@ -18,6 +18,8 @@
 ;;;; > *applicators*, *expanders*
 ;;;; > array and list comparison can't use eq-object behind ``='' as the
 ;;;;   test needs to determine if they are the same object
+;;;; > why do we need to duplicate the null terminator implementation
+;;;;   for strings?
 ;;;;
 ;;;; NOTES
 ;;;; . forwarding dispatches to symbol objects (because things that
@@ -543,6 +545,10 @@
                      (mk-expr #'maru-primitive-string-at))
     (maru-define ctx (maru-intern ctx "set-string-at")
                      (mk-expr #'maru-primitive-set-string-at))
+    (maru-define ctx (maru-intern ctx "string->symbol")
+                     (mk-expr #'maru-primitive-string->symbol))
+    (maru-define ctx (maru-intern ctx "symbol->string")
+                     (mk-expr #'maru-primitive-symbol->string))
 
     (maru-define ctx (maru-intern ctx "form")
                      (mk-expr #'maru-primitive-form))
@@ -837,6 +843,27 @@
       (maru-nil))))
 
 ; expr
+; > IDL: imaru implementation ignores extra args
+(defun maru-primitive-string->symbol (ctx args)
+  (declare (ignore ctx))
+  (cond ((zerop (maru-length args)) (maru-nil))
+        ((typep (maru-car args) 'symbol-object) (maru-car args))
+        ((typep (maru-car args) 'string-object)
+         ;; don't copy the null terminator
+         (maru-string-to-symbol (maru-car args)))
+        (t (maru-nil))))
+
+; expr
+; > IDL: imaru implementation ignores extra args
+(defun maru-primitive-symbol->string (ctx args)
+  (declare (ignore ctx))
+  (cond ((zerop (maru-length args)) (maru-nil))
+        ((typep (maru-car args) 'string-object) (maru-car args))
+        ((typep (maru-car args) 'symbol-object)
+         (mk-string :value (object-value (maru-car args))))
+        (t (maru-nil))))
+
+; expr
 (defun maru-primitive-form (ctx args)
   (declare (ignore ctx))
   (assert (and (= 1 (maru-length args))
@@ -991,6 +1018,13 @@
   (if value
       (make-instance 'string-object :value (scat value #\Nul))
       (make-instance 'string-object :value (make-string (1+ size)))))
+
+(defun maru-string-to-symbol (maru-string)
+  (assert (typep maru-string 'string-object))
+  (let ((val (object-value maru-string)))
+    ;; care null terminator
+    (assert (char= #\Null (aref val (1- (length val)))))
+    (mk-symbol (subseq val 0 (1- (length val))))))
 
 (defclass char-object (single-value-object)
   ())
@@ -2505,25 +2539,28 @@
                         (maru-nil))
                (maru-all-transforms ctx use-it))))
 
+(defun concat-string-src ()
+  "(define concat-string
+     (lambda (x y)
+       (let ((a (string-length x))
+             (b (string-length y)))
+         (let ((s (string (+ a b)))
+               (i 0)
+               (j 0))
+           (while (< i a)
+             (set-string-at s j (string-at x i))
+             (set i (+ i 1))
+             (set j (+ j 1)))
+           (set i 0)
+           (while (< i b)
+             (set-string-at s j (string-at y i))
+             (set i (+ i 1))
+             (set j (+ j 1)))
+           s))))")
+
 (deftest test-maru-concat-string
   (let ((ctx (maru-initialize))
-        (code "(define concat-string
-                 (lambda (x y)
-                   (let ((a (string-length x))
-                     (b (string-length y)))
-                     (let ((s (string (+ a b)))
-                       (i 0)
-                       (j 0))
-                   (while (< i a)
-                     (set-string-at s j (string-at x i))
-                     (set i (+ i 1))
-                     (set j (+ j 1)))
-                   (set i 0)
-                   (while (< i b)
-                     (set-string-at s j (string-at y i))
-                     (set i (+ i 1))
-                     (set j (+ j 1)))
-                   s))))")
+        (code (concat-string-src))
         (use-it "(block
                    (define s0 \"abc\")
                    (define s1 \"xyz\")
@@ -2738,10 +2775,34 @@
                            (mk-number "5"))
                (maru-all-transforms ctx use-it))))
 
+(defun maru-initialize+ ()
+  (let ((ctx (maru-initialize))
+        (qq-src (quasiquote-src))
+        (def-src (define-function-src))
+        (cs-src (concat-string-src)))
+    (maru-all-transforms ctx qq-src)
+    (dolist (d def-src)
+      (maru-all-transforms ctx d))
+    (maru-all-transforms ctx cs-src)
+    ctx))
+
+(deftest test-maru-concat-symbol
+  (let ((ctx (maru-initialize+))
+        (src "(define concat-symbol
+                (lambda (x y)
+                  (string->symbol
+                    (concat-string (symbol->string x)
+                                   (symbol->string y)))))")
+        (use-it "(concat-symbol 'hello 'world)"))
+    (maru-all-transforms ctx src)
+    (eq-object (mk-symbol "helloworld")
+               (maru-all-transforms ctx use-it))))
+
 (deftest test-maru-define-structure
   (let ((ctx (maru-initialize))
         (qq-src (quasiquote-src))
         (def-src (define-function-src))
+        (ll-src (list-length-src))
         ;; FIXME: macros need to be transformed in their own cycle
         (src "(block
                 (define %type-names (array 16))
@@ -2756,7 +2817,7 @@
                 (define %structure-sizes    (array))
                 (define %structure-fields   (array))
                 (define-function %make-accessor (name fields offset)
-                  (if fields 
+                  (if fields
                       (cons
                         `(define-form
                            ,(concat-symbol
@@ -2782,11 +2843,12 @@
                    (define l (new <lon>))
                    (set (<long>-_bits) 10)
                    (cons l (oop-at l 0))"))
-    (declare (ignore ctx qq-src def-src src long-struct use-it))
+    (declare (ignore ctx qq-src def-src ll-src src long-struct use-it))
     nil))
 #|
     (maru-all-transforms ctx qq-src)
     (maru-all-transforms ctx def-src)
+    (maru-all-transforms ctx ll-src)
     (maru-all-transforms ctx src)
     (maru-all-transforms ctx long-struct)
     (maru-all-transforms ctx use-it)))
