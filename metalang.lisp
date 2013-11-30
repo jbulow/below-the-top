@@ -532,8 +532,8 @@
     (maru-define ctx (maru-intern ctx "pair?")
                      (mk-expr #'maru-primitive-pair?))
     ;; extension
-    (maru-define ctx (maru-intern ctx "list")
-                     (mk-expr #'maru-primitive-list))
+    (maru-define ctx (maru-intern ctx "_list")
+                     (mk-expr #'maru-primitive-_list))
     ;; strings
     (maru-define ctx (maru-intern ctx "string")
                      (mk-expr #'maru-primitive-string))
@@ -792,7 +792,7 @@
   (mk-bool (maru-pair? (maru-car args))))
 
 ; expr
-(defun maru-primitive-list (ctx args)
+(defun maru-primitive-_list (ctx args)
   (declare (ignore ctx))
   args)
 
@@ -851,7 +851,6 @@
   (mk-array (object-value (maru-car args))))
 
 ; expr
-; FIXME: do resize
 (defun maru-primitive-set-array-at (ctx args)
   (declare (ignore ctx))
   (assert (and (= 3 (maru-length args))
@@ -2564,7 +2563,7 @@
 
 (deftest test-maru-list-primitive
   (let ((ctx (maru-initialize))
-        (src "(list 1 2 (list \"three\" (list 4)) \"five\")"))
+        (src "(_list 1 2 (_list \"three\" (_list 4)) \"five\")"))
     (eq-object (mk-list (mk-number "1") (mk-number "2")
                         (mk-list (mk-string :value "three")
                                  (mk-list (mk-number "4")))
@@ -2617,14 +2616,14 @@
                                        (= (car obj)
                                           'unquote-splicing))
                                   (if (cdr l)
-                                      (list 'concat-list
+                                      (_list 'concat-list
                                             (cadr obj)
                                             (qq-list (cdr l)))
                                       (cadr obj))
-                                  (list 'cons
+                                  (_list 'cons
                                         (qq-object obj)
                                         (qq-list (cdr l)))))
-                            (list 'quote l))))
+                            (_list 'quote l))))
            (set qq-element (lambda (l)
                              (let ((head (car l)))
                                (if (= head 'unquote)
@@ -2633,7 +2632,7 @@
            (set qq-object (lambda (object)
                             (if (pair? object)
                                 (qq-element object)
-                                (list 'quote object))))
+                                (_list 'quote object))))
            (lambda (expr)
              (qq-object expr))))))")
 
@@ -2643,20 +2642,24 @@
          (lambda (name args . body)
            `(define ,name (form (lambda ,args ,@body))))))"
     "(define-form define-function (name args . body)
-       `(define ,name (lambda ,args ,@body)))"
-    "(define-function list-length (list)
-       (if (pair? list)
+       `(define ,name (lambda ,args ,@body)))"))
+
+(defun list-length-src ()
+  "(define-function list-length (list)
+     (if (pair? list)
          (+ 1 (list-length (cdr list)))
-         0))"))
+         0))")
 
 (deftest test-maru-define-form
   (let ((ctx (maru-initialize))
         (qq-src (quasiquote-src))
         (def-src (define-function-src))
+        (ll-src (list-length-src))
         (use-it "(cons (list-length '()) (list-length '(0 1 2 3)))"))
     (maru-all-transforms ctx qq-src)
     (dolist (d def-src)
       (maru-all-transforms ctx d))
+    (maru-all-transforms ctx ll-src)
     (eq-object (mk-pair (mk-number "0") (mk-number "4"))
                (maru-all-transforms ctx use-it))))
 
@@ -2734,6 +2737,60 @@
                            (mk-list (mk-number "4"))
                            (mk-number "5"))
                (maru-all-transforms ctx use-it))))
+
+(deftest test-maru-define-structure
+  (let ((ctx (maru-initialize))
+        (qq-src (quasiquote-src))
+        (def-src (define-function-src))
+        ;; FIXME: macros need to be transformed in their own cycle
+        (src "(block
+                (define %type-names (array 16))
+                (define %last-type  -1)
+                (define %allocate-type
+                  (lambda (name)
+                    (set %last-type (+ 1 %last-type))
+                    (set-array-at %type-names %last-type name)
+                    %last-type))
+                (define-function name-of-type (type)
+                  (array-at %type-names type))
+                (define %structure-sizes    (array))
+                (define %structure-fields   (array))
+                (define-function %make-accessor (name fields offset)
+                  (if fields 
+                      (cons
+                        `(define-form
+                           ,(concat-symbol
+                              name
+                              (concat-symbol '- (car fields)))
+                           (self)
+                           (list 'oop-at self ,offset))
+                         (%make-accessor name (cdr fields)
+                                              (+ 1 offset)))))
+                (define-function %make-accessors (name fields)
+                  (%make-accessor name fields 0))
+                (define-form define-structure (name fields)
+                  (let ((type (%allocate-type name))
+                        (size (list-length fields)))
+                    (set-array-at %structure-sizes  type size)                                 (set-array-at %structure-fields type fields)
+                    `(let ()
+                       (define ,name ,type)
+                       ,@(%make-accessors name fields))))
+                (define-function new (type)
+                  (allocate type (array-at %structure-sizes type))))")
+        (long-struct "(define-structure <long>    (_bits))")
+        (use-it "(block
+                   (define l (new <lon>))
+                   (set (<long>-_bits) 10)
+                   (cons l (oop-at l 0))"))
+    (declare (ignore ctx qq-src def-src src long-struct use-it))
+    nil))
+#|
+    (maru-all-transforms ctx qq-src)
+    (maru-all-transforms ctx def-src)
+    (maru-all-transforms ctx src)
+    (maru-all-transforms ctx long-struct)
+    (maru-all-transforms ctx use-it)))
+|#
 
 (deftest test-maru-closure-context
   (let ((ctx (maru-initialize))
@@ -2832,7 +2889,7 @@
                         (* n 10)))
                     (set gn
                       (lambda (i)
-                        (list 'cons i i)))
+                        (_list 'cons i i)))
                     (lambda ()
                         (gn (fn 5))))))")
         (use-it "(m)"))
@@ -2861,7 +2918,7 @@
                     `(define ,a
                        (form
                          (lambda ,b
-                           (pair? (car (list ,@b)))))))))")
+                           (pair? (car (_list ,@b)))))))))")
         (src1 "(m something a b c d)")
         (src2 "(something '(1 2) 3 4)"))
     (maru-all-transforms ctx (quasiquote-src))
