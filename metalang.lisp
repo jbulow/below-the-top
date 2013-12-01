@@ -1389,9 +1389,14 @@
       (do ((_  nil (setf params (maru-cdr params)))
            (__ nil (setf values (maru-cdr values))))
           ((not (maru-pair? params)) nil)
+        ;; too few arguments?
+        (assert (not (maru-nil? values)))
         (maru-define-new-binding
           child-ctx (maru-car params) (maru-car values)))
-      ;; lambda list is dotted; eat the rest of the arguments
+      ;; lambda list is a symbol or is improper; all remaining args bind
+      ;; to the remaining param
+      ;; > (lambda args args)
+      ;; > (lambda (a b . c) ...)
       (when (typep params 'symbol-object)
             (maru-define-new-binding
               child-ctx params values)
@@ -3095,7 +3100,7 @@
                          (lambda ,b
                            (pair? (car (_list ,@b)))))))))")
         (src1 "(m something a b c d)")
-        (src2 "(something '(1 2) 3 4)"))
+        (src2 "(something '(1 2) 3 4 5)"))
     (maru-all-transforms ctx (quasiquote-src))
     (maru-all-transforms ctx src)
     (maru-all-transforms ctx src1)
@@ -3237,6 +3242,16 @@
        (not (maru-proper? (mk-pair (mk-number "1")
                                    (mk-pair (mk-number "9")
                                             (mk-number "99")))))))
+
+(deftest test-imaru-list
+  (let ((ctx (maru-initialize))
+        (src "(define list (lambda args args))")
+        (use-it "(block
+                   (define l (list 'a 'b 'c))
+                   l)"))
+    (maru-all-transforms ctx src)
+    (eq-object (mk-list (mk-symbol "a") (mk-symbol "b") (mk-symbol "c"))
+               (maru-all-transforms ctx use-it))))
 
 (deftest test-negative-number-bug
   (let ((ctx (maru-initialize))
