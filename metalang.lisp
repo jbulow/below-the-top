@@ -20,6 +20,8 @@
 ;;;;   test needs to determine if they are the same object
 ;;;; > why do we need to duplicate the null terminator implementation
 ;;;;   for strings?
+;;;; > fix the disparity between chars and numbers that doesn't exist in
+;;;;   imaru (longs)
 ;;;;
 ;;;; NOTES
 ;;;; . forwarding dispatches to symbol objects (because things that
@@ -446,7 +448,11 @@
           (maru-printable-object (pair-object-car object))
           " . "
           (maru-printable-object (pair-object-cdr object))
-          ")")))
+          ")"))
+  (:method ((object raw-object))
+    (format nil "<raw-object :type => ~A, :size => ~A>"
+                (raw-object-type object)
+                (length (raw-object-mem object)))))
 
 (defun maru-printable (sexpr)
   (tree-map #'maru-printable-object sexpr))
@@ -571,6 +577,9 @@
                      (mk-expr #'maru-primitive-array-at))
     (maru-define ctx (maru-intern ctx "set-array-at")
                      (mk-expr #'maru-primitive-set-array-at))
+    ;; ``raw'' memory
+    (maru-define ctx (maru-intern ctx "allocate")
+                     (mk-expr #'maru-primitive-allocate))
 
     ;; compositioners
     (maru-define ctx (maru-intern ctx "*expanders*") (mk-array 32))
@@ -927,6 +936,16 @@
                   (object-value (maru-cadr args)))
           (maru-caddr args))))
 
+; expr
+(defun maru-primitive-allocate (ctx args)
+  (declare (ignore ctx))
+  (assert (= 2 (maru-length args)))
+  ;; return nil if either argument is not a number (long)
+  (when (not (and (typep (maru-car args) 'number-object)
+                  (typep (maru-cadr args) 'number-object)))
+    (return-from maru-primitive-allocate (maru-nil)))
+  (mk-raw (object-value (maru-car args)) (object-value (maru-cadr args))))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;  maru type transformer
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -1123,6 +1142,15 @@
 (defun mk-pform (fn)
   (make-instance 'pseudoform-object :function fn))
 
+(defclass raw-object (basic-object)
+  ((type :accessor raw-object-type
+         :initarg  :type)
+   (mem  :accessor raw-object-mem
+         :initarg  :mem)))
+
+(defun mk-raw (type size)
+  (make-instance 'raw-object :type type :mem (init-vector size)))
+
 (defgeneric eq-object (lhs rhs)
   (:method ((lhs single-value-object) (rhs single-value-object))
     (equal (object-value lhs) (object-value rhs)))
@@ -1151,6 +1179,10 @@
   (:method ((lhs array-object) (rhs array-object))
     (eq-vector (array-object-elements lhs) (array-object-elements rhs)
                :test #'eq-object))
+  ;; raw mem
+  (:method ((lhs raw-object) (rhs raw-object))
+    (and (eql (raw-object-type lhs) (raw-object-type rhs))
+         (eq-vector (raw-object-mem lhs) (raw-object-mem rhs))))
   ;; catch all
   (:method (lhs rhs)
     nil))
@@ -2895,19 +2927,24 @@
          (concat-string (symbol->string x)
                         (symbol->string y)))))")
 
+(defun list-src ()
+  "(define list (lambda args args))")
+
 (defun maru-initialize+ ()
   (let ((ctx (maru-initialize))
         (qq-src (quasiquote-src))
         (def-src (define-function-src))
         (cs-src (concat-string-src))
         (ll-src (list-length-src))
-        (csym-src (concat-symbol-src)))
+        (csym-src (concat-symbol-src))
+        (l-src (list-src)))
     (maru-all-transforms ctx qq-src)
     (dolist (d def-src)
       (maru-all-transforms ctx d))
     (maru-all-transforms ctx cs-src)
     (maru-all-transforms ctx ll-src)
     (maru-all-transforms ctx csym-src)
+    (maru-all-transforms ctx l-src)
     ctx))
 
 (deftest test-maru-concat-symbol
@@ -2965,12 +3002,12 @@
         (use-it "(block
                    (define l (new <long>))
                    (set (<long>-_bits l) 10)
-                   (cons l (oop-at l 0)))"))
-    (declare (ignore ctx src long-struct use-it))
-    nil))
-    ; (maru-all-transforms ctx src)
-    ; (maru-all-transforms ctx long-struct)
-    ; (maru-all-transforms ctx use-it)))
+                   (cons l (cons (oop-at l 0) (<long>-_bits l)))"))
+    ; (declare (ignore ctx src long-struct use-it))
+    ; nil))
+    (maru-all-transforms ctx src)
+    (maru-all-transforms ctx long-struct)
+    (maru-all-transforms ctx use-it)))
 
 (deftest test-maru-closure-context
   (let ((ctx (maru-initialize))
@@ -3244,12 +3281,11 @@
                                             (mk-number "99")))))))
 
 (deftest test-imaru-list
-  (let ((ctx (maru-initialize))
-        (src "(define list (lambda args args))")
+  "uses a symbol for the lambda lists; capture all arguments"
+  (let ((ctx (maru-initialize+))
         (use-it "(block
                    (define l (list 'a 'b 'c))
                    l)"))
-    (maru-all-transforms ctx src)
     (eq-object (mk-list (mk-symbol "a") (mk-symbol "b") (mk-symbol "c"))
                (maru-all-transforms ctx use-it))))
 
@@ -3258,3 +3294,16 @@
         (src "(define a -10)"))
     (eq-object (mk-number "-10")
                (maru-all-transforms ctx src))))
+
+(deftest test-maru-allocate-primitive
+  (let ((ctx (maru-initialize))
+        (use-it "(_list (allocate 12 3) (allocate 1 '())
+                        (allocate () 5) (allocate '() ()))"))
+    (eq-object (mk-list (mk-raw 12 3) (maru-nil) (maru-nil) (maru-nil))
+               (maru-all-transforms ctx use-it))))
+
+(deftest test-maru-oop-at-primitive
+  nil)
+
+(deftest test-maru-set-oop-at-primitive
+  nil)
