@@ -363,6 +363,9 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+(define-condition exit-program-signal (error)
+  ((code :initarg :code)))
+
 (defclass maru-env ()
   ((bindings :accessor maru-env-bindings
              :initarg  :bindings
@@ -526,6 +529,10 @@
                      (mk-expr #'maru-primitive-caar))
     (maru-define ctx (maru-intern ctx "and")
                      (mk-fixed #'maru-primitive-and))
+    (maru-define ctx (maru-intern ctx "or")
+                     (mk-fixed #'maru-primitive-or))
+    (maru-define ctx (maru-intern ctx "not")
+                     (mk-fixed #'maru-primitive-not))
     (maru-define ctx (maru-intern ctx "define")
                      (mk-fixed #'maru-primitive-define))
     ;; extension
@@ -563,6 +570,8 @@
                      (mk-fixed #'maru-primitive-seth))
     (maru-define ctx (maru-intern ctx "pair?")
                      (mk-expr #'maru-primitive-pair?))
+    (maru-define ctx (maru-intern ctx "symbol?")
+                     (mk-expr #'maru-primitive-symbol?))
     (maru-define ctx (maru-intern ctx "apply")
                      (mk-expr #'maru-primitive-apply))
     (maru-define ctx (maru-intern ctx "print")
@@ -595,6 +604,8 @@
                      (mk-expr #'maru-primitive-array-at))
     (maru-define ctx (maru-intern ctx "set-array-at")
                      (mk-expr #'maru-primitive-set-array-at))
+    (maru-define ctx (maru-intern ctx "array?")
+                     (mk-expr #'maru-primitive-array?))
     ;; ``raw'' memory
     (maru-define ctx (maru-intern ctx "allocate")
                      (mk-expr #'maru-primitive-allocate))
@@ -602,6 +613,11 @@
                      (mk-expr #'maru-primitive-set-oop-at))
     (maru-define ctx (maru-intern ctx "oop-at")
                      (mk-expr #'maru-primitive-oop-at))
+    ;; exit program
+    (maru-define ctx (maru-intern ctx "exit")
+                     (mk-expr #'maru-primitive-exit))
+    (maru-define ctx (maru-intern ctx "abort")
+                     (mk-expr #'maru-primitive-abort))
 
     ;; compositioners
     (maru-define ctx (maru-intern ctx "*expanders*") (mk-array 32))
@@ -718,6 +734,21 @@
       (setf out (nice-eval pred))
       (when (maru-nil? out)
         (return out)))))
+
+; fixed
+(defun maru-primitive-or (ctx args)
+  (declare (ignore ctx))
+  (let ((out (maru-nil)))
+    (dolist (pred (maru-list-to-internal-list-1 args) out)
+      (setf out (nice-eval pred))
+      (when (not (maru-nil? out))
+        (return out)))))
+
+; expr
+(defun maru-primitive-not (ctx args)
+  (declare (ignore ctx))
+  (assert (= 1 (maru-length args)))
+  (mk-bool (maru-nil? (maru-car args))))
 
 ; form
 ; FIXME: Should we be expanding here?
@@ -844,6 +875,11 @@
   (mk-bool (maru-pair? (maru-car args))))
 
 ; expr
+(defun maru-primitive-symbol? (ctx args)
+  (declare (ignore ctx))
+  (mk-bool (maru-symbol? (maru-car args))))
+
+; expr
 ; args <- function, args, environment
 (defun maru-primitive-apply (ctx args)
   (assert (and (<= (maru-length args) 3)))
@@ -856,9 +892,10 @@
     (maru-apply fn fn-args ctx)))
 
 ; expr
+; FIXME: make nicer output/match imaru
 (defun maru-primitive-print (ctx args)
   (declare (ignore ctx))
-  (apply #'format t "~A" (maru-list-to-internal-list args)))
+  (funcall #'format t "~A" (maru-printable-object args)))
 
 ; expr
 (defun maru-primitive-_list (ctx args)
@@ -984,6 +1021,13 @@
           (maru-caddr args))))
 
 ; expr
+; > imaru ignores extra arguments
+(defun maru-primitive-array? (ctx args)
+  (declare (ignore ctx))
+  (assert (and (= 1 (maru-length args))))
+  (mk-bool (maru-array? (maru-car args))))
+
+; expr
 (defun maru-primitive-allocate (ctx args)
   (declare (ignore ctx))
   (assert (= 2 (maru-length args)))
@@ -1032,6 +1076,20 @@
       (when (not (and (>= native-index 0) (< native-index (length mem))))
         (return-from maru-primitive-oop-at (maru-nil)))
       (svref mem native-index))))
+
+; expr
+(defun maru-primitive-exit (ctx args)
+  (declare (ignore ctx))
+  (let ((code (if (typep (maru-car args) 'number-object)
+                  (maru-car args)
+                  (mk-number "0"))))
+    (error 'exit-program-signal :code code)))
+
+; expr
+(defun maru-primitive-abort (ctx args)
+  (declare (ignore ctx args))
+  (format t "aborted~%")
+  (error 'exit-program-signal :code 1))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -1311,6 +1369,18 @@
   (:method ((object basic-object))
     nil)
   (:method ((object pair-object))
+    t))
+
+(defgeneric maru-symbol? (object)
+  (:method ((object basic-object))
+    nil)
+  (:method ((object symbol-object))
+    t))
+
+(defgeneric maru-array? (object)
+  (:method ((object basic-object))
+    nil)
+  (:method ((object array-object))
     t))
 
 ;;; sexpr : should be a (possibly nested) list of string literals
@@ -2563,7 +2633,7 @@
     ;; global
     (maru-define ctx (maru-intern ctx "that") (mk-number "15"))
     (setf child-ctx (maru-spawn-child-env ctx))
-    (maru-intern child-ctx "or")
+    (maru-intern child-ctx "somethang")
     ;; global
     (maru-define child-ctx (maru-intern child-ctx "theother")
                            (mk-number "16"))
@@ -2572,16 +2642,16 @@
          (member (mk-symbol "this") (maru-context-symbols ctx)
                  :test #'eq-object)
          (binding-exists? ctx "that")
-         (not (binding-exists? ctx "or"))
+         (not (binding-exists? ctx "somethang"))
          (binding-exists? ctx "theother")
          ; child symbols still valid
-         (member (mk-symbol "or") (maru-context-symbols ctx)
+         (member (mk-symbol "somethang") (maru-context-symbols ctx)
                  :test #'eq-object)
          (member (mk-symbol "theother") (maru-context-symbols ctx)
                  :test #'eq-object)
          ;; added stuff to child env
-         (not (binding-exists? child-ctx "or"))
-         (member (mk-symbol "or") (maru-context-symbols child-ctx)
+         (not (binding-exists? child-ctx "somethang"))
+         (member (mk-symbol "somethang") (maru-context-symbols child-ctx)
                  :test #'eq-object)
          (binding-exists? child-ctx "theother")
          ;; can still get stuff from parent env
@@ -3559,25 +3629,72 @@
     (eq-object (mk-string :value "school")
                (maru-all-transforms ctx use-it))))
 
+;; FIXME: handle newlines
 (deftest test-imaru-println
   (let ((ctx (maru-initialize+))
+        ;; modified; should use do-print where we use %print
         (src "(block
                 (define %print print)
                 (define print
                   (lambda args
                     (while (pair? args)
-                      (do-print (car args))
+                      (%print (car args))
                       (set args (cdr args)))))
                 (define println
                    (lambda args
                      (apply print args)
-                     (%print \"\n\"))))")    ;; MOD
+                     (%print \"\n\"))))")
         (use-it "(block
                    (define a 10)
                    (println \"hello \" a \"world\"))"))
-    (declare (ignore ctx src use-it))
-    ; (maru-all-transforms ctx src)
+    ; (declare (ignore ctx src use-it))
+    (maru-all-transforms ctx src)
     ;; FIXME: test the output of some stream
-    ; (maru-all-transforms ctx use-it)
+    (maru-all-transforms ctx use-it)
     nil))
+
+(deftest test-maru-exit-primitive
+  (let ((ctx (maru-initialize))
+        (src "(exit 2)"))
+    (must-signal exit-program-signal
+      (maru-all-transforms ctx src))))
+
+(deftest test-maru-abort-primitive
+  (let ((ctx (maru-initialize))
+        (src "(abort \"args\" \"dont\" \"matter\")"))
+    (must-signal exit-program-signal
+      (maru-all-transforms ctx src))))
+
+(deftest test-maru-or-primitive
+  (let ((ctx (maru-initialize))
+        (src "(cons (or () () 4) (or 2 5))"))
+    (eq-object (mk-pair (mk-number "4") (mk-number "2"))
+               (maru-all-transforms ctx src))))
+
+(deftest test-maru-eval-primitive
+  nil)
+
+(deftest test-maru-type-of-primitive
+  nil)
+
+(deftest test-maru-dump-primitive
+  nil)
+
+(deftest test-maru-symbol?-primitive
+  (let ((ctx (maru-initialize))
+        (src "(cons (symbol? 'this-or-that) (symbol? ?a))"))
+    (eq-object (mk-pair (mk-bool t) (mk-bool nil))
+               (maru-all-transforms ctx src))))
+
+(deftest test-maru-array?-primitive
+  (let ((ctx (maru-initialize))
+        (src "(cons (array? 5) (array? (array 3)))"))
+    (eq-object (mk-pair (mk-bool nil) (mk-bool t))
+               (maru-all-transforms ctx src))))
+
+(deftest test-maru-not-primitive
+  (let ((ctx (maru-initialize))
+        (src "(cons (not ()) (not (not (not 5))))"))
+    (eq-object (mk-pair (mk-bool t) (mk-bool nil))
+               (maru-all-transforms ctx src))))
 
