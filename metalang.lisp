@@ -806,9 +806,9 @@
   (assert *pseudoexpansion*)
   (assert (= 2 (maru-length args)))
   (cond ((maru-list? (maru-car args))
-           (mk-pair (mk-symbol (scat "set-"
-                                 (object-value (maru-caar args))))
-                    (mk-pair (maru-cadar args) (maru-cdr args))))
+         (mk-pair (mk-symbol (scat "set-"
+                               (object-value (maru-caar args))))
+                  (maru-concat (maru-cdar args) (maru-cdr args))))
         (t (mk-pair (mk-symbol "seth") args))))
 
 ; fixed
@@ -1048,6 +1048,9 @@
 (defmethod maru-cadr (maru-list)
   (maru-car (maru-cdr maru-list)))
 
+(defmethod maru-cdar (maru-list)
+  (maru-cdr (maru-car maru-list)))
+
 (defmethod maru-cddr (maru-list)
   (maru-cdr (maru-cdr maru-list)))
 
@@ -1066,6 +1069,11 @@
   (:method ((n nil-object))
     (declare (ignore n))
     0))
+
+(defmethod maru-concat ((lhs list-object) (rhs list-object))
+  (if (maru-nil? lhs)
+      rhs
+      (mk-pair (maru-car lhs) (maru-concat (maru-cdr lhs) rhs))))
 
 ;; FIXME: use defgeneric
 (defmethod maru-last ((pair pair-object) &optional (n 1))
@@ -2183,7 +2191,7 @@
                      :tfuncs (maru-tfuncs)))
     ; (when (atom expanded-expr)
         ; (format t "PEXPAND: ~A~%"
-        ;           (maru-printable-object pexpanded-expr)))
+                  ; (maru-printable-object pexpanded-expr)))
     (setf evald-expr
           (transform eval-transformer
                      pexpanded-expr
@@ -3011,7 +3019,6 @@
 
 (deftest test-maru-define-structure
   (let ((ctx (maru-initialize+))
-        ;; FIXME: macros need to be transformed in their own cycle
         (src "(block
                 (define %type-names (array 16))
                 (define %last-type  -1)
@@ -3020,8 +3027,6 @@
                     (set %last-type (+ 1 %last-type))
                     (set-array-at %type-names %last-type name)
                     %last-type))
-                (define-function name-of-type (type)
-                  (array-at %type-names type))
                 (define %structure-sizes    (array))
                 (define %structure-fields   (array))
                 (define-function %make-accessor (name fields offset)
@@ -3050,12 +3055,15 @@
         (use-it "(block
                    (define l (new <long>))
                    (set (<long>-_bits l) 10)
-                   (cons l (cons (oop-at l 0) (<long>-_bits l)))"))
-    (declare (ignore ctx src long-struct use-it))
-    nil))
-    ; (maru-all-transforms ctx src)
-    ; (maru-all-transforms ctx long-struct)
-    ; (maru-all-transforms ctx use-it)))
+                   (cons l (cons (oop-at l 0) (<long>-_bits l))))")
+        (test-raw nil))
+    (maru-all-transforms ctx src)
+    (maru-all-transforms ctx long-struct)
+    (setf test-raw (mk-raw 0 1))
+    (setf (svref (raw-object-mem test-raw) 0) (mk-number "10"))
+    (eq-object (mk-pair test-raw
+                        (mk-pair (mk-number "10") (mk-number "10")))
+               (maru-all-transforms ctx use-it))))
 
 (deftest test-maru-closure-context
   (let ((ctx (maru-initialize))
@@ -3419,4 +3427,19 @@
                     (maru-all-transforms ctx "(oop-at dd -9)"))
          (eq-object (maru-nil)
                     (maru-all-transforms ctx "(oop-at dd 24)")))))
+
+(deftest test-maru-set-primitive-bug
+  "set must handle multiple arguments to the car function"
+  (let ((ctx (maru-initialize))
+        (src "(block
+                (define fn
+                  (lambda (a b c)
+                    (+ a (+ b c))))
+                (define set-fn
+                  (lambda (a b c d)
+                    (+ a (+ b (+ c d))))))")
+        (use-it "(set (fn 2 3 4) 5)"))
+    (maru-all-transforms ctx src)
+    (eq-object (mk-number "14")
+               (maru-all-transforms ctx use-it))))
 
