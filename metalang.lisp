@@ -149,6 +149,16 @@
   (let ((quoted (tokenize next-char-fn read-table)))
     (list "quasiquote" quoted)))
 
+(defun doublequote-handler (next-char-fn read-table)
+  (declare (ignore read-table))
+  (let ((output ""))
+    (do ((c (funcall next-char-fn) (funcall next-char-fn)))
+        ((char-equal c #\") output)
+      (when (char-equal #\\ c)
+        (setf c (funcall next-char-fn)))
+      (setf output (scat output c)))
+    (scat "\"" output "\"")))
+
 (defun read-macro? (c read-table)
   (assoc c read-table :test #'char=))
 
@@ -1940,6 +1950,30 @@
            '("842" ("quasiquote" ("this" "that" "another" ("9")))
              ("quasiquote" "4")))))
 
+(deftest test-doublequote-escapes
+  (let ((ctx (maru-initialize))
+        (src "(define b \"kewl\\\"bro\\\"\")")
+        (typed-expr
+          (mk-list (mk-symbol "define") (mk-symbol "b")
+                   (mk-string :value "kewl\"bro\""))))
+    (eq-object typed-expr (type-expr ctx src))))
+
+(deftest test-doublequote-bug-trailing-string-space
+  (let ((ctx (maru-initialize))
+        (src "(define a \"this \")")
+        (typed-expr
+          (mk-list (mk-symbol "define") (mk-symbol "a")
+                   (mk-string :value "this "))))
+    (eq-object typed-expr (type-expr ctx src))))
+
+(deftest test-doublequote-bug-internal-string-space
+  (let ((ctx (maru-initialize))
+        (src "(define a \"this that\")")
+        (typed-expr
+          (mk-list (mk-symbol "define") (mk-symbol "a")
+                   (mk-string :value "this that"))))
+    (eq-object typed-expr (type-expr ctx src))))
+
 (deftest test-next-char-factory-peek-bug
   (let ((next-char-fn
           (next-char-factory "something")))
@@ -2170,7 +2204,8 @@
 
 (defun untype-expr (src)
   (let ((read-table '((#\' . quote-handler) (#\, . unquote-handler)
-                      (#\` . quasiquote-handler))))
+                      (#\` . quasiquote-handler)
+                      (#\" . doublequote-handler))))
     (untype-everything
       (tokenize (next-char-factory src) read-table))))
 
@@ -3482,3 +3517,18 @@
     (maru-all-transforms ctx src)
     (eq-object (mk-string :value "school")
                (maru-all-transforms ctx use-it))))
+
+(deftest test-imaru-println
+  (let ((ctx (maru-initialize+))
+        (src "(define println
+                (lambda args
+                  (apply print args)
+                  (%print \"\n\")))")
+        (use-it "(block
+                   (define a 10)
+                   (println \"hello \" a \"world\"))"))
+    (maru-all-transforms ctx src)
+    ;; FIXME: test the output of some stream
+    (maru-all-transforms ctx use-it)
+    nil))
+
