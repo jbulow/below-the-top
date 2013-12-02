@@ -1958,6 +1958,14 @@
                    (mk-string :value "kewl\"bro\""))))
     (eq-object typed-expr (type-expr ctx src))))
 
+(deftest test-doublequote-bug-leading-string-space
+  (let ((ctx (maru-initialize))
+        (src "(define d \"  this\")")
+        (typed-expr
+          (mk-list (mk-symbol "define") (mk-symbol "d")
+                   (mk-string :value "  this"))))
+    (eq-object typed-expr (type-expr ctx src))))
+
 (deftest test-doublequote-bug-trailing-string-space
   (let ((ctx (maru-initialize))
         (src "(define a \"this \")")
