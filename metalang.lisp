@@ -573,6 +573,8 @@
     ;; arrays
     (maru-define ctx (maru-intern ctx "array")
                      (mk-expr #'maru-primitive-array))
+    (maru-define ctx (maru-intern ctx "array-length")
+                     (mk-expr #'maru-primitive-array-length))
     (maru-define ctx (maru-intern ctx "array-at")
                      (mk-expr #'maru-primitive-array-at))
     (maru-define ctx (maru-intern ctx "set-array-at")
@@ -861,7 +863,7 @@
   (assert (and (= 3 (maru-length args))
                (typep (maru-car args) 'string-object)
                (typep (maru-cadr args) 'number-object)
-               (typep (maru-cadr args) 'number-object)))
+               (typep (maru-caddr args) 'char-object)))
   (let ((index (object-value (maru-cadr args)))
         (char (object-value (maru-caddr args))))
     (if (and (>= index 0) (< index (string-object-size (maru-car args))))
@@ -910,6 +912,14 @@
       (mk-array (object-value (maru-car args)))))
 
 ; expr
+(defun maru-primitive-array-length (ctx args)
+  (declare (ignore ctx))
+  (assert (and (= 1 (maru-length args))
+               (typep (maru-car args) 'array-object)))
+  (mk-number
+    (to-string (length (array-object-elements (maru-car args))))))
+
+; expr
 (defun maru-primitive-array-at (ctx args)
   (declare (ignore ctx))
   (assert (and (= 2 (maru-length args))
@@ -918,7 +928,7 @@
   (let ((arr (array-object-elements (maru-car args)))
         (index (object-value (maru-cadr args))))
     (if (>= index (length arr))
-        nil ; return nil if out of bounds
+        (maru-nil) ; return nil if out of bounds
         (svref arr index))))
 
 ; expr
@@ -2986,6 +2996,14 @@
 (defun list-src ()
   "(define list (lambda args args))")
 
+(defun let*-src ()
+  '("(define-function %let* (bindings body)
+       (if (pair? (cdr bindings))
+           `(let (,(car bindings)) ,(%let* (cdr bindings) body))
+           `(let ,bindings ,@body)))"
+    "(define-form let* bindings-body
+       (%let* (car bindings-body) (cdr bindings-body)))"))
+
 (defun maru-initialize+ ()
   (let ((ctx (maru-initialize))
         (qq-src (quasiquote-src))
@@ -3001,6 +3019,8 @@
     (maru-all-transforms ctx ll-src)
     (maru-all-transforms ctx csym-src)
     (maru-all-transforms ctx l-src)
+    (dolist (e (let*-src))
+      (maru-all-transforms ctx e))
     ctx))
 
 (deftest test-maru-concat-symbol
@@ -3443,3 +3463,22 @@
     (eq-object (mk-number "14")
                (maru-all-transforms ctx use-it))))
 
+(deftest test-imaru-array->string
+  (let ((ctx (maru-initialize+))
+        (src "(define-function array->string (arr)
+                (let* ((ind 0)
+                       (lim (array-length arr))
+                       (str (string lim)))
+                  (while (< ind lim)
+                    (set-string-at str ind (array-at arr ind))
+                    (set ind (+ 1 ind)))
+                  str))")
+        (use-it "(block
+                   (define a (array 6))
+                   (set-array-at a 0 ?s) (set-array-at a 1 ?c)
+                   (set-array-at a 2 ?h) (set-array-at a 3 ?o)
+                   (set-array-at a 4 ?o) (set-array-at a 5 ?l)
+                   (array->string a))"))
+    (maru-all-transforms ctx src)
+    (eq-object (mk-string :value "school")
+               (maru-all-transforms ctx use-it))))
