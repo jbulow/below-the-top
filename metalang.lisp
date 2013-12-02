@@ -580,6 +580,10 @@
     ;; ``raw'' memory
     (maru-define ctx (maru-intern ctx "allocate")
                      (mk-expr #'maru-primitive-allocate))
+    (maru-define ctx (maru-intern ctx "set-oop-at")
+                     (mk-expr #'maru-primitive-set-oop-at))
+    (maru-define ctx (maru-intern ctx "oop-at")
+                     (mk-expr #'maru-primitive-oop-at))
 
     ;; compositioners
     (maru-define ctx (maru-intern ctx "*expanders*") (mk-array 32))
@@ -946,6 +950,47 @@
     (return-from maru-primitive-allocate (maru-nil)))
   (mk-raw (object-value (maru-car args)) (object-value (maru-cadr args))))
 
+; expr
+(defun maru-primitive-set-oop-at (ctx args)
+  (declare (ignore ctx))
+  (assert (= 3 (maru-length args)))
+  (let ((raw (maru-car args))
+        (index (maru-cadr args)))
+    ;; fail if we try to use set-oop-at on non raw objects
+    (assert (typep raw 'raw-object))
+    ;; return nil if index argument is not a number (long)
+    (when (not (typep index 'number-object))
+      (return-from maru-primitive-set-oop-at (maru-nil)))
+    (let ((native-index (object-value index))
+          (mem (raw-object-mem raw)))
+      ;; return nil if index is out of range
+      (when (not (and (>= native-index 0) (< native-index (length mem))))
+        (return-from maru-primitive-set-oop-at (maru-nil)))
+      (setf (svref mem native-index) (maru-caddr args)))))
+
+; expr
+(defun maru-primitive-oop-at (ctx args)
+  (declare (ignore ctx))
+  (assert (= 2 (maru-length args)))
+  (let ((raw (maru-car args))
+        (index (maru-cadr args)))
+    ;; accout for the imaru nil exception
+    (when (maru-nil? (maru-car args))
+      (return-from maru-primitive-oop-at (maru-nil)))
+    ;; fail if we try to use set-oop-at on non raw objects (other than
+    ;; nil)
+    (assert (typep raw 'raw-object))
+    ;; return nil if index argument is not a number (long)
+    (when (not (typep index 'number-object))
+      (return-from maru-primitive-oop-at (maru-nil)))
+    (let ((native-index (object-value index))
+          (mem (raw-object-mem raw)))
+      ;; return nil if index is out of range
+      (when (not (and (>= native-index 0) (< native-index (length mem))))
+        (return-from maru-primitive-oop-at (maru-nil)))
+      (svref mem native-index))))
+
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;  maru type transformer
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -1149,7 +1194,9 @@
          :initarg  :mem)))
 
 (defun mk-raw (type size)
-  (make-instance 'raw-object :type type :mem (init-vector size)))
+  (make-instance 'raw-object
+    :type type
+    :mem (init-vector size :initial-element (maru-nil))))
 
 (defgeneric eq-object (lhs rhs)
   (:method ((lhs single-value-object) (rhs single-value-object))
@@ -1182,7 +1229,8 @@
   ;; raw mem
   (:method ((lhs raw-object) (rhs raw-object))
     (and (eql (raw-object-type lhs) (raw-object-type rhs))
-         (eq-vector (raw-object-mem lhs) (raw-object-mem rhs))))
+         (eq-vector (raw-object-mem lhs) (raw-object-mem rhs)
+                    :test #'eq-object)))
   ;; catch all
   (:method (lhs rhs)
     nil))
@@ -3003,11 +3051,11 @@
                    (define l (new <long>))
                    (set (<long>-_bits l) 10)
                    (cons l (cons (oop-at l 0) (<long>-_bits l)))"))
-    ; (declare (ignore ctx src long-struct use-it))
-    ; nil))
-    (maru-all-transforms ctx src)
-    (maru-all-transforms ctx long-struct)
-    (maru-all-transforms ctx use-it)))
+    (declare (ignore ctx src long-struct use-it))
+    nil))
+    ; (maru-all-transforms ctx src)
+    ; (maru-all-transforms ctx long-struct)
+    ; (maru-all-transforms ctx use-it)))
 
 (deftest test-maru-closure-context
   (let ((ctx (maru-initialize))
@@ -3299,11 +3347,76 @@
   (let ((ctx (maru-initialize))
         (use-it "(_list (allocate 12 3) (allocate 1 '())
                         (allocate () 5) (allocate '() ()))"))
-    (eq-object (mk-list (mk-raw 12 3) (maru-nil) (maru-nil) (maru-nil))
-               (maru-all-transforms ctx use-it))))
-
-(deftest test-maru-oop-at-primitive
-  nil)
+    (and (eq-object (mk-list (mk-raw 12 3) (maru-nil) (maru-nil)
+                             (maru-nil))
+                    (maru-all-transforms ctx use-it))
+         ;; all elements should be nil
+         (progn
+           (maru-all-transforms ctx "(define g (allocate 3 2))")
+           (and (eq-object (maru-nil)
+                           (svref (raw-object-mem
+                                    (maru-all-transforms ctx "(block g)"))
+                                  0))
+                (eq-object (maru-nil)
+                           (svref (raw-object-mem
+                                    (maru-all-transforms ctx "(block g)"))
+                                  1)))))))
 
 (deftest test-maru-set-oop-at-primitive
-  nil)
+  "we only support this op with raw objects"
+  (let ((ctx (maru-initialize))
+        (use-it "(block
+                   (define aa (allocate 0 2))
+                   (set-oop-at aa 0 55))"))
+    (and (eq-object (mk-number "55")
+                    (maru-all-transforms ctx use-it))
+         (eq-object (mk-number "55")
+                    (svref (raw-object-mem
+                             (maru-all-transforms ctx "(block aa)"))
+                           0)))))
+
+(deftest test-maru-set-oop-at-primitive-invalids
+  (let ((ctx (maru-initialize))
+        (use-it "(block
+                   (define bb (allocate 8 3))
+                   (set-oop-at bb 1 23))"))
+    (maru-all-transforms ctx use-it)
+    ;; return nil and do nothing on non integer index
+    (and (eq-object (maru-nil)
+                    (maru-all-transforms ctx "(set-oop-at bb \"t\" 14)"))
+         ;; return nil and do nothing if index is out of bounds
+         (eq-object (maru-nil)
+                    (maru-all-transforms ctx "(set-oop-at bb -5 10)"))
+         (eq-object (maru-nil)
+                    (maru-all-transforms ctx "(set-oop-at bb 9 8)"))
+         (eq-object (mk-number "23")
+                    (svref (raw-object-mem
+                             (maru-all-transforms ctx "(block bb)"))
+                           1)))))
+
+(deftest test-maru-oop-at-primitive
+  (let ((ctx (maru-initialize))
+        (use-it "(block
+                   (define cc (allocate 9 5))
+                   (set-oop-at cc 2 14)
+                   (set-oop-at cc 4 8)
+                   (cons (oop-at cc 2) (oop-at cc 4)))"))
+    (and (eq-object (mk-pair (mk-number "14") (mk-number "8"))
+                    (maru-all-transforms ctx use-it)))))
+
+(deftest test-maru-oop-at-primitive-invalids
+  (let ((ctx (maru-initialize))
+        (use-it "(define dd (allocate 10 7))"))
+    (maru-all-transforms ctx use-it)
+         ;; return nil and do nothing if non integer index
+    (and (eq-object (maru-nil)
+                    (maru-all-transforms ctx "(oop-at dd dd)"))
+         ;; return nil and do nothing if object is nil
+         (eq-object (maru-nil)
+                    (maru-all-transforms ctx "(oop-at '() 9)"))
+         ;; return nil and do nothing if index is out of bounds
+         (eq-object (maru-nil)
+                    (maru-all-transforms ctx "(oop-at dd -9)"))
+         (eq-object (maru-nil)
+                    (maru-all-transforms ctx "(oop-at dd 24)")))))
+
