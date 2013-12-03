@@ -106,6 +106,8 @@
 
 ;;;; Tokenizes a single sexpr
 ;;;; > FIXME: we could treat #\( as a macro character
+;;;; > will throw a token-error if there are only comments; source files
+;;;;   cannot end in comments
 (defun tokenize (next-char-fn &optional read-table)
   (let ((c (funcall next-char-fn)))
     (cond ((null c) (error 'token-error :text "no form to tokenize"))
@@ -118,20 +120,25 @@
           (t (funcall next-char-fn 'unread)
              (tokenize-characters next-char-fn)))))
 
+(defparameter *bogus-count* nil)
 (defun next-char-factory (expr)
   (let ((count 0))
     (lambda (&optional opt)
-      (block factory
-        (when (eq opt 'unread)
-          (decf count)
-          (return-from factory 'unread))
-        (let ((do-inc (not (string= opt 'peek))))
-          (unwind-protect
-            (cond ((< count 0) 'negative-space)
-                    ((>= count (length expr)) nil)
-                    (t (elt expr count)))
-            (when do-inc
-              (incf count))))))))
+      (cond ((string= 'unread opt)
+             (decf count)
+             'unread)
+            ((string= 'count opt)
+             ;; FIXME: you probably don't want a count past the end of
+             ;; the string
+             (assert (or *bogus-count* (< count (length expr))))
+             count)
+            (t (let ((do-inc (not (string= opt 'peek))))
+                 (unwind-protect
+                   (cond ((< count 0) 'negative-space)
+                         ((>= count (length expr)) nil)
+                         (t (elt expr count)))
+                 (when do-inc
+                   (incf count)))))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;       read macros
@@ -161,6 +168,14 @@
         (setf c (funcall next-char-fn)))
       (setf output (scat output c)))
     (scat "\"" output "\"")))
+
+(defun semicolon-handler (next-char-fn read-table)
+  (do ((c (funcall next-char-fn) (funcall next-char-fn)))
+      ((or (eq c nil) (char-equal c #\Newline)))
+    nil)
+  ;; remove the possible newline
+  (funcall next-char-fn)
+  (tokenize next-char-fn read-table))
 
 (defun read-macro? (c read-table)
   (assoc c read-table :test #'char=))
@@ -461,7 +476,16 @@
   (:method ((object form-object))
     "<form-object>")
   (:method ((object array-object))
-    "<array-object>")
+    (scat "[" 
+          (let ((arr (array-object-elements object))
+                (out ""))
+            (do ((i 0 (1+ i)))
+                ((= i (length arr)) out)
+              (setf out
+                    (scat out
+                          (if (zerop i) "" ", ")
+                          (maru-printable-object (svref arr i))))))
+          "]"))
   (:method ((object pair-object))
     (scat "("
           (maru-printable-object (pair-object-car object))
@@ -1494,7 +1518,6 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; > hardcoded semantics for evaluation composition
 
-;; FIXME: implement
 (defmethod fetch-applicator ((object basic-object))
   (declare (special *ctx*))
   (when (typep object 'raw-object)
@@ -1545,7 +1568,9 @@
                          (args list-object))
   (declare (special *ctx*))
   (let ((applicator (fetch-applicator object)))
-    (cond (applicator `(nil . ,(maru-apply applicator args *ctx*)))
+    (cond (applicator
+            `(nil . ,(maru-apply applicator
+                                 (mk-pair object args) *ctx*)))
           (t (assert (next-method-p)) (call-next-method)))))
 
 ;;;;;;;;;; symbol object ;;;;;;;;;;
@@ -1714,7 +1739,9 @@
 (defmethod inform ((object raw-object)
                    (transformer-name (eql 'eval))
                    (whatami (eql 'lead)))
-  nil)
+  ;; > arguments must be evaluated because *applicators* expect their
+  ;;   arguments to be evaluated
+  t)
 
 (defmethod pass ((object raw-object)
                  (transformer-name (eql 'eval))
@@ -1912,6 +1939,31 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;         file i/o
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(defun read-file (path)
+  (with-open-file (stream path :direction :input)
+    (let ((seq (make-string (file-length stream))))
+      (read-sequence seq stream)
+      seq)))
+
+;; > the imaru execution model does all transformations on one
+;; sexpression before moving on
+(defun process-file (path)
+  (let ((ctx (maru-initialize))
+        (src (read-file path)))
+    (do ((count 0 count))
+        ((>= count (- (length src) 10)))    ;; kludge
+      (multiple-value-bind (out new-count)
+          (maru-all-transforms ctx (subseq src count))
+        (declare (ignore out))
+        ; (format t "C: ~A~%" count)
+        (setf count (+ count new-count))))))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;            Tests
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -2021,6 +2073,14 @@
   (let ((next-char-fn (next-char-factory "(tokenize () this)")))
     (equal (tokenize next-char-fn)
            '("tokenize" nil "this"))))
+
+;; FIXME: this behavior should not be hardcoded in the tokenizor
+(deftest test-tokenize-terminating-double-quote-bug
+  "double quotes terminate symbols in imaru"
+  (let ((next-char-fn
+          (next-char-factory "(this\"is\"(awesome\"k\"ney))")))
+    (equal (tokenize next-char-fn)
+           '("this" "\"is\"" ("awesome" "\"k\"" "ney")))))
 
 (deftest test-dot
   (let ((src "'(1 . (2 . (3 . 4)))"))
@@ -2143,6 +2203,32 @@
         (typed-expr
           (mk-list (mk-symbol "define") (mk-symbol "a")
                    (mk-string :value "this that"))))
+    (eq-object typed-expr (type-expr ctx src))))
+
+(deftest test-semicolon-handler
+  (let ((ctx (maru-initialize))
+        (src "(block
+                ;;; ignore this text
+                ; this text as well
+                (but not this)
+                ;; ignore more
+                okay)")
+        (typed-expr (mk-list (mk-symbol "block")
+                             (mk-list (mk-symbol "but")
+                                      (mk-symbol "not")
+                                      (mk-symbol "this"))
+                             (mk-symbol "okay"))))
+    (eq-object typed-expr (type-expr ctx src))))
+
+(deftest test-semicolon-handler-2
+  (let ((ctx (maru-initialize))
+        (src ";;;; a comment
+              ;;; another comment
+              ;; more commenting
+              ;!!!!
+              (a form)
+              ;; additional")
+        (typed-expr (mk-list (mk-symbol "a") (mk-symbol "form"))))
     (eq-object typed-expr (type-expr ctx src))))
 
 (deftest test-next-char-factory-peek-bug
@@ -2374,14 +2460,20 @@
                                (mk-number "14")))))))      ;; else
 
 (defun untype-expr (src)
-  (let ((read-table '((#\' . quote-handler) (#\, . unquote-handler)
-                      (#\` . quasiquote-handler)
-                      (#\" . doublequote-handler))))
-    (untype-everything
-      (tokenize (next-char-factory src) read-table))))
+  (let* ((read-table '((#\' . quote-handler) (#\, . unquote-handler)
+                       (#\` . quasiquote-handler)
+                       (#\" . doublequote-handler)
+                       (#\; . semicolon-handler)))
+         (factory (next-char-factory src))
+         (untyped (untype-everything (tokenize factory read-table))))
+    (let ((*bogus-count* t))
+      (declare (special *bogus-count*))
+      (values untyped (funcall factory 'count)))))
 
 (defun type-expr (ctx src)
-  (transform (maru-typer) (untype-expr src) ctx))
+  (multiple-value-bind (untyped count)
+        (untype-expr src)
+    (values (transform (maru-typer) untyped ctx) count)))
 
 (defun maru-expand->eval (ctx expr)
   (let ((expand-transformer (make-transformer :name 'expand))
@@ -2415,10 +2507,17 @@
     evald-expr))
 
 (defun maru-all-transforms (ctx src)
-  (let ((typed-expr (type-expr ctx src)))
+  (multiple-value-bind (typed-expr count)
+        (type-expr ctx src)
     ; (when (atom typed-expr)
         ; (format t "TYPED: ~A~%" (maru-printable-object typed-expr)))
-    (maru-expand->eval ctx typed-expr)))
+    (values (maru-expand->eval ctx typed-expr) count)))
+
+;; for debugging
+(defun exec (src)
+  (declare (special *ctx*))
+  (maru-printable-object
+    (maru-all-transforms *ctx* (scat "(block " src " )"))))
 
 (deftest test-maru-eval-with-fixed
   (let* ((ctx (maru-initialize))
@@ -2670,10 +2769,12 @@
         (use-it "(cons (a 1 2 3) (a \"this\"))"))
     (maru-all-transforms ctx src)
     (eq-object (mk-pair (mk-list (mk-number "55")
+                                 (mk-raw 3 3)
                                  (mk-number "1")
                                  (mk-number "2")
                                  (mk-number "3"))
                         (mk-list (mk-number "55")
+                                 (mk-raw 3 3)
                                  (mk-string :value "this")))
                (maru-all-transforms ctx use-it))))
 
