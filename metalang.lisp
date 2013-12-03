@@ -624,10 +624,13 @@
                      (mk-expr #'maru-primitive-apply))
     (maru-define ctx (maru-intern ctx "eval")
                      (mk-expr #'maru-primitive-eval))
+    ;; output
     (maru-define ctx (maru-intern ctx "print")
                      (mk-expr #'maru-primitive-print))
     (maru-define ctx (maru-intern ctx "dump")
                      (mk-expr #'maru-primitive-dump))
+    (maru-define ctx (maru-intern ctx "warn")
+                     (mk-expr #'maru-primitive-warn))
     ;; extension
     (maru-define ctx (maru-intern ctx "_list")
                      (mk-expr #'maru-primitive-_list))
@@ -1017,6 +1020,12 @@
 (defun maru-primitive-dump (ctx args)
   (declare (ignore ctx))
   (funcall #'format t "~A" (maru-printable-object args)))
+
+; expr
+; FIXME: make nicer output/match imaru
+(defun maru-primitive-warn (ctx args)
+  (declare (ignore ctx))
+  (funcall #'format *error-output* "~A" (maru-printable-object args)))
 
 ; expr
 (defun maru-primitive-_list (ctx args)
