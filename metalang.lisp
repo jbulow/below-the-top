@@ -573,6 +573,7 @@
                      (mk-fixed #'maru-primitive-let))
     (maru-define ctx (maru-intern ctx "while")
                      (mk-fixed #'maru-primitive-while))
+    ;; arithmetic
     (maru-define ctx (maru-intern ctx "+")
                      (mk-expr #'maru-primitive-add))
     (maru-define ctx (maru-intern ctx "-")
@@ -581,6 +582,22 @@
                      (mk-expr #'maru-primitive-mul))
     (maru-define ctx (maru-intern ctx "/")
                      (mk-expr #'maru-primitive-div))
+    (maru-define ctx (maru-intern ctx "%")
+                     (mk-expr #'maru-primitive-mod))
+    ;; bit twiddling
+    (maru-define ctx (maru-intern ctx "&")
+                     (mk-expr #'maru-primitive-bit-and))
+    (maru-define ctx (maru-intern ctx "|")
+                     (mk-expr #'maru-primitive-bit-or))
+    (maru-define ctx (maru-intern ctx "^")
+                     (mk-expr #'maru-primitive-bit-xor))
+    (maru-define ctx (maru-intern ctx "~")
+                     (mk-expr #'maru-primitive-complement))
+    (maru-define ctx (maru-intern ctx "<<")
+                     (mk-expr #'maru-primitive-shift-left))
+    (maru-define ctx (maru-intern ctx ">>")
+                     (mk-expr #'maru-primitive-shift-right))
+    ;; ordering
     (maru-define ctx (maru-intern ctx "=")
                      (mk-expr #'maru-primitive-eq))
     (maru-define ctx (maru-intern ctx "!=")
@@ -853,6 +870,50 @@
   (declare (ignore ctx))
   (mk-number (floor (object-value (maru-car args))
                     (object-value (maru-cadr args)))))
+
+; expr
+(defun maru-primitive-mod (ctx args)
+  (declare (ignore ctx))
+  (multiple-value-bind (whole-quotient remainder)
+        (floor (object-value (maru-car args))
+               (object-value (maru-cadr args)))
+    (declare (ignore whole-quotient))
+    (mk-number remainder)))
+
+; expr
+(defun maru-primitive-bit-and (ctx args)
+  (declare (ignore ctx))
+  (mk-number (logand (object-value (maru-car args))
+                     (object-value (maru-cadr args)))))
+
+; expr
+(defun maru-primitive-bit-or (ctx args)
+  (declare (ignore ctx))
+  (mk-number (logior (object-value (maru-car args))
+                     (object-value (maru-cadr args)))))
+
+; expr
+(defun maru-primitive-bit-xor (ctx args)
+  (declare (ignore ctx))
+  (mk-number (logxor (object-value (maru-car args))
+                     (object-value (maru-cadr args)))))
+
+; expr
+(defun maru-primitive-complement (ctx args)
+  (declare (ignore ctx))
+  (mk-number (lognot (object-value (maru-car args)))))
+
+; expr
+(defun maru-primitive-shift-left (ctx args)
+  (declare (ignore ctx))
+  (mk-number (ash (object-value (maru-car args))
+                  (object-value (maru-cadr args)))))
+
+; expr
+(defun maru-primitive-shift-right (ctx args)
+  (declare (ignore ctx))
+  (mk-number (ash (object-value (maru-car args))
+                  (- (object-value (maru-cadr args))))))
 
 ; expr
 (defun maru-primitive-eq (ctx args)
@@ -1952,7 +2013,8 @@
   (let ((ctx (maru-initialize))
         (src (read-file path)))
     (do ((count 0 count))
-        ((>= count (- (length src) 10)))    ;; kludge
+                   ;; kludge
+        ((>= count (- (length src) 10)) ctx)
       (multiple-value-bind (out new-count)
           (maru-all-transforms ctx (subseq src count))
         (declare (ignore out))
@@ -2654,10 +2716,11 @@
 
 (deftest test-maru-primitive-arithmetic
   (let* ((ctx (maru-initialize))
-         (src "(- (/ (* 5 (+ 8 4)) 2) 9)")
+         (src "(- (/ (* 5 (+ 8 (% 13 9))) 2) 9)")
          (result (maru-all-transforms ctx src)))
     (and (binding-exists? ctx "-") (binding-exists? ctx "+")
          (binding-exists? ctx "*") (binding-exists? ctx "/")
+         (binding-exists? ctx "%")
          (eq-object result (mk-number 21)))))
 
 (deftest test-maru-primitive-ordering
@@ -2677,6 +2740,14 @@
                                                    (mk-pair
                                                      (mk-bool t)
                                                      (mk-bool t))))))
+               (maru-all-transforms ctx src))))
+
+(deftest test-maru-primitive-bit-twiddling
+  (let* ((ctx (maru-initialize))
+         (src "(_list (& 3 9) (| 2 6) (~ 12) (^ 4 5) (<< 3 2)
+                      (>> 12 3))"))
+    (eq-object (mk-list (mk-number 1) (mk-number 6) (mk-number -13)
+                        (mk-number 1) (mk-number 12) (mk-number 1))
                (maru-all-transforms ctx src))))
 
 (deftest test-maru-primitive-lambda
