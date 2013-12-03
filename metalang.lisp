@@ -108,6 +108,7 @@
 ;;;; > FIXME: we could treat #\( as a macro character
 ;;;; > will throw a token-error if there are only comments; source files
 ;;;;   cannot end in comments
+;;;    + this behavior matches read-from-string
 (defun tokenize (next-char-fn &optional read-table)
   (let ((c (funcall next-char-fn)))
     (cond ((null c) (error 'token-error :text "no form to tokenize"))
@@ -120,25 +121,25 @@
           (t (funcall next-char-fn 'unread)
              (tokenize-characters next-char-fn)))))
 
-(defparameter *bogus-count* nil)
+;; ``default'' : remove and return the next character from the stream
+;; count       : the number of characters successfuly read from the stream
+;;               minus the number of characters successfully unread
+;; unread      : put the last character back into the stream
+;; peek        : get the next character without removing it from stream
 (defun next-char-factory (expr)
   (let ((count 0))
     (lambda (&optional opt)
+      (assert (and (<= 0 count) (<= count (length expr))))
       (cond ((string= 'unread opt)
-             (decf count)
-             'unread)
-            ((string= 'count opt)
-             ;; FIXME: you probably don't want a count past the end of
-             ;; the string
-             (assert (or *bogus-count* (< count (length expr))))
-             count)
-            (t (let ((do-inc (not (string= opt 'peek))))
-                 (unwind-protect
-                   (cond ((< count 0) 'negative-space)
-                         ((>= count (length expr)) nil)
-                         (t (elt expr count)))
-                 (when do-inc
-                   (incf count)))))))))
+             (if (> count 0)
+                 (and (decf count) t)
+                 nil))
+            ((string= 'count opt) count)
+            (t (cond ((= count (length expr)) nil)
+                     (t (unwind-protect
+                            (elt expr count)
+                          (when (not (string= 'peek opt))
+                            (incf count))))))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;       read macros
@@ -2008,25 +2009,24 @@
   (let ((next-char-fn (next-char-factory "world!")))
     (and (char= (funcall next-char-fn) #\w)
          (char= (funcall next-char-fn) #\o)
-         (progn
-           (funcall next-char-fn 'unread)
-           (funcall next-char-fn 'unread)
-           (char= (funcall next-char-fn) #\w))
-         (progn
-           (char= (funcall next-char-fn) #\o))
-         (progn
-           (funcall next-char-fn 'unread)
-           (funcall next-char-fn 'unread)
-           (funcall next-char-fn 'unread)
-           (string= (funcall next-char-fn) 'negative-space))
+         (funcall next-char-fn 'unread)
+         (funcall next-char-fn 'unread)
+         (char= (funcall next-char-fn) #\w)
+         (char= (funcall next-char-fn) #\o)
+         (funcall next-char-fn 'unread)
+         (funcall next-char-fn 'unread)
+         (null (funcall next-char-fn 'unread))
+         (null (funcall next-char-fn 'unread))
          (char= (funcall next-char-fn) #\w)
          (char= (funcall next-char-fn) #\o)
          (char= (funcall next-char-fn) #\r)
          (char= (funcall next-char-fn) #\l)
-         (progn
-           (funcall next-char-fn 'unread)
-           (char= (funcall next-char-fn) #\l))
-         (char= (funcall next-char-fn) #\d))))
+         (funcall next-char-fn 'unread)
+         (char= (funcall next-char-fn) #\l)
+         (char= (funcall next-char-fn) #\d)
+         (char= (funcall next-char-fn) #\!)
+         (null (funcall next-char-fn))
+         (null (funcall next-char-fn)))))
 
 (deftest test-next-char-factory-peek
   (let ((next-char-fn (next-char-factory "sometext")))
@@ -2038,6 +2038,44 @@
          (progn
            (funcall next-char-fn 'unread)
            (char= (funcall next-char-fn 'peek) #\o)))))
+
+(deftest test-next-char-factory-count
+  (let* ((str "in and out")
+         (next-char-fn (next-char-factory str))
+         (index 0))
+         ;; does count behave reasonably before the end of the string?
+    (and (reduce #'(lambda (a e)
+                     (and a (eql e (funcall next-char-fn))
+                            (= (incf index)
+                               (funcall next-char-fn 'count))))
+                 str
+                 :initial-value t)
+         ;; count should never be larger than the length of the string
+         (= index (funcall next-char-fn 'count))
+         (null (funcall next-char-fn))
+         (null (funcall next-char-fn))
+         (null (funcall next-char-fn))
+         (= index (funcall next-char-fn 'count)))))
+
+(deftest test-next-char-factory-unread-bug
+  (let* ((str "one")
+         (next-char-fn (next-char-factory str)))
+    (do ((i 0 (1+ i)))
+        ((= i (length str)))
+      (funcall next-char-fn))
+    (assert (= (length str) (funcall next-char-fn 'count)))
+         ;; unread after we read the last character
+    (and (funcall next-char-fn 'unread)
+         (char= #\e (funcall next-char-fn 'read))
+         ;; read ``past'' the end
+         (null (funcall next-char-fn 'read))
+         (null (funcall next-char-fn 'read))
+         (null (funcall next-char-fn 'read))
+         ;; now unread and again grab the last character
+         (funcall next-char-fn 'unread)
+         (char= #\e (funcall next-char-fn 'read)))))
+
+
 
 (deftest test-tsugar
   (let-sugar (std-tfuncs)
@@ -2466,9 +2504,7 @@
                        (#\; . semicolon-handler)))
          (factory (next-char-factory src))
          (untyped (untype-everything (tokenize factory read-table))))
-    (let ((*bogus-count* t))
-      (declare (special *bogus-count*))
-      (values untyped (funcall factory 'count)))))
+    (values untyped (funcall factory 'count))))
 
 (defun type-expr (ctx src)
   (multiple-value-bind (untyped count)
