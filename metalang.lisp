@@ -833,26 +833,26 @@
 ; expr
 (defun maru-primitive-add (ctx args)
   (declare (ignore ctx))
-  (mk-number (to-string (+ (object-value (maru-car args))
-                           (object-value (maru-cadr args))))))
+  (mk-number (+ (object-value (maru-car args))
+                (object-value (maru-cadr args)))))
 
 ; expr
 (defun maru-primitive-sub (ctx args)
   (declare (ignore ctx))
-  (mk-number (to-string (- (object-value (maru-car args))
-                           (object-value (maru-cadr args))))))
+  (mk-number (- (object-value (maru-car args))
+                (object-value (maru-cadr args)))))
 
 ; expr
 (defun maru-primitive-mul (ctx args)
   (declare (ignore ctx))
-  (mk-number (to-string (* (object-value (maru-car args))
-                           (object-value (maru-cadr args))))))
+  (mk-number (* (object-value (maru-car args))
+                (object-value (maru-cadr args)))))
 
 ; expr
 (defun maru-primitive-div (ctx args)
   (declare (ignore ctx))
-  (mk-number (to-string (floor (object-value (maru-car args))
-                               (object-value (maru-cadr args))))))
+  (mk-number (floor (object-value (maru-car args))
+                    (object-value (maru-cadr args)))))
 
 ; expr
 (defun maru-primitive-eq (ctx args)
@@ -920,7 +920,7 @@
   (assert (= 1 (maru-length args)))
   (when (not (typep (maru-car args) 'raw-object))
     (error 'bad-type-of))
-  (mk-number (to-string (raw-object-type (maru-car args)))))
+  (mk-number (raw-object-type (maru-car args))))
 
 ; expr
 ; args <- function, [args], [environment]
@@ -974,7 +974,7 @@
   (declare (ignore ctx))
   (assert (and (= 1 (maru-length args))
                (typep (maru-car args) 'string-object)))
-  (mk-number (to-string (string-object-size (maru-car args)))))
+  (mk-number (string-object-size (maru-car args))))
 
 ; expr
 (defun maru-primitive-string-at (ctx args)
@@ -1046,8 +1046,7 @@
   (declare (ignore ctx))
   (assert (and (= 1 (maru-length args))
                (typep (maru-car args) 'array-object)))
-  (mk-number
-    (to-string (length (array-object-elements (maru-car args))))))
+  (mk-number (length (array-object-elements (maru-car args)))))
 
 ; expr
 (defun maru-primitive-array-at (ctx args)
@@ -1142,7 +1141,7 @@
   (declare (ignore ctx))
   (let ((code (if (typep (maru-car args) 'number-object)
                   (maru-car args)
-                  (mk-number "0"))))
+                  (mk-number 0))))
     (error 'exit-program-signal :code code)))
 
 ; expr
@@ -1255,11 +1254,9 @@
 (defclass number-object (single-value-object)
   ())
 
-(defun mk-number (value &key hex)
-  (make-instance 'number-object
-                 :value (read-from-string (if hex
-                                              (scat "#x" value)
-                                              value))))
+(defun mk-number (value)
+  (assert (typep value 'integer))
+  (make-instance 'number-object :value value))
 
 (defclass string-object (single-value-object)
   ())
@@ -1461,8 +1458,8 @@
              (if (and (>= len 2) (char-equal #\x (char val 1)))
                (progn
                  (assert (> len 2))
-                 (mk-number (subseq val 2 len) :hex t))
-               (mk-number val)))
+                 (mk-number (parse-integer (subseq val 2 len) :radix 16)))
+               (mk-number (parse-integer val))))
           ((char= #\? first-char)
            (mk-char (char val 1)))
           ((graphic-char-p first-char) (maru-intern ctx val))
@@ -2298,9 +2295,9 @@
                         (tokenize
                           (next-char-factory
                             "(trees 0x123 (green 2) 0X456)"))))
-        (typed-expr (mk-list (mk-symbol "trees") (mk-number "123" :hex t)
-                             (mk-list (mk-symbol "green") (mk-number "2"))
-                             (mk-number "456" :hex t)))
+        (typed-expr (mk-list (mk-symbol "trees") (mk-number #x123)
+                             (mk-list (mk-symbol "green") (mk-number 2))
+                             (mk-number #x456)))
         (ctx (maru-mk-ctx)))
     (eq-object (transform type-transformer untyped-expr ctx) typed-expr)))
 
@@ -2328,9 +2325,9 @@
           (mk-list (mk-symbol "define") (mk-symbol "a")
                    (mk-list (mk-symbol "quote")
                             (mk-list
-                              (mk-number "1")
-                              (mk-list (mk-number "2")
-                                       (mk-number "3")))))))
+                              (mk-number 1)
+                              (mk-list (mk-number 2)
+                                       (mk-number 3)))))))
     (eq-object typed-expr (type-expr ctx src))))
 
 (deftest test-maru-intern
@@ -2374,7 +2371,7 @@
 
 (deftest test-maru-define
   (let* ((ctx (maru-mk-ctx))
-         (obj (mk-number "4001"))
+         (obj (mk-number 4001))
          (sym-string "neverneverneverland")
          (test-out (cons (mk-symbol sym-string) obj))
          (out nil))
@@ -2388,7 +2385,7 @@
 
 (deftest test-maru-lookup
   (let* ((ctx (maru-mk-ctx :parent-ctx (maru-mk-ctx)))
-         (obj (mk-number "43"))
+         (obj (mk-number 43))
          (sym "some-symbol")
          (obj2 (mk-string :value "thisandthat"))
          (sym2 "another-symbol")
@@ -2431,7 +2428,7 @@
   (let-sugar (maru-tfuncs)
     (let* ((ctx (maru-initialize))
            (a (mk-string :value "this"))
-           (b (mk-number "200"))
+           (b (mk-number 200))
            (out nil))
       (setf out
             (funcall (function-object-fn
@@ -2453,7 +2450,7 @@
                          typed-expr
                          ctx
                          :tfuncs (maru-tfuncs)))
-    (eq-object (mk-pair (mk-string :value "kewl") (mk-number "22"))
+    (eq-object (mk-pair (mk-string :value "kewl") (mk-number 22))
                out)))
 
 (deftest test-maru-eval-transform-simple-bindings
@@ -2466,15 +2463,15 @@
          (type-transformer (maru-typer))
          (typed-expr (transform type-transformer untyped-expr ctx))
          (out nil))
-    (maru-define ctx (mk-symbol "yessuh") (mk-number "100"))
+    (maru-define ctx (mk-symbol "yessuh") (mk-number 100))
     (maru-define ctx (mk-symbol "kewl") (mk-string :value "astronauts"))
     (setf out (transform eval-transformer
                          typed-expr
                          ctx
                          :tfuncs (maru-tfuncs)))
     (and (eq-object (maru-car out)  (mk-string :value "astronauts"))
-         (eq-object (maru-car (maru-cdr out)) (mk-number "100"))
-         (eq-object (maru-cdr (maru-cdr out)) (mk-number "22")))))
+         (eq-object (maru-car (maru-cdr out)) (mk-number 100))
+         (eq-object (maru-cdr (maru-cdr out)) (mk-number 22)))))
 
 (deftest test-maru-primitive-if-simple
   (let ((ctx (maru-initialize)))
@@ -2486,16 +2483,16 @@
                              (mk-list
                                (mk-string :value "not-nil")  ;; predicate
                                (mk-string :value "goodbye")  ;; then
-                               (mk-number "100"))))          ;; else
+                               (mk-number 100))))          ;; else
          ;; test 'else' branch
-         (eq-object (mk-number "14")
+         (eq-object (mk-number 14)
                     (funcall (function-object-fn
                                 (maru-lookup ctx (maru-intern ctx "if")))
                              ctx
                              (mk-list
                                (maru-nil)                 ;; predicate
-                               (mk-number "12")           ;; then
-                               (mk-number "14")))))))      ;; else
+                               (mk-number 12)           ;; then
+                               (mk-number 14)))))))      ;; else
 
 (defun untype-expr (src)
   (let* ((read-table '((#\' . quote-handler) (#\, . unquote-handler)
@@ -2559,7 +2556,7 @@
   (let* ((ctx (maru-initialize))
          (eval-transformer (make-transformer :name 'eval))
          (typed-expr (type-expr ctx "(if 100 200 300)")))
-    (eq-object (mk-number "200")
+    (eq-object (mk-number 200)
                (transform eval-transformer
                           typed-expr
                           ctx
@@ -2593,7 +2590,7 @@
   (let* ((ctx (maru-initialize))
          (expand-transformer (make-transformer :name 'eval))
          (typed-expr (type-expr ctx "(and 1 2 3 20)")))
-    (eq-object (mk-number "20")
+    (eq-object (mk-number 20)
                (transform expand-transformer
                           typed-expr
                           ctx
@@ -2613,8 +2610,8 @@
          (evaled-expr
            (maru-all-transforms ctx
                                 "(cons (define a 3) 4)")))
-    (and (eq-object evaled-expr (mk-pair (mk-number "3")
-                                         (mk-number "4"))))))
+    (and (eq-object evaled-expr (mk-pair (mk-number 3)
+                                         (mk-number 4))))))
 
 ;; no longer an expand bug as define is no longer a macro
 (deftest test-maru-expand-bug-2
@@ -2625,7 +2622,7 @@
                                 "(block
                                    (define fn (lambda (a) (define a 3)))
                                    (fn 5))")))
-    (and (eq-object (mk-number "3") evaled-expr))))
+    (and (eq-object (mk-number 3) evaled-expr))))
 
 (deftest test-maru-primitive-define
   (let* ((ctx (maru-initialize))
@@ -2652,7 +2649,7 @@
                  (let ()
                    (define a 20))
                  a)"))
-    (eq-object (mk-number "20")
+    (eq-object (mk-number 20)
                (maru-all-transforms ctx src))))
 
 (deftest test-maru-primitive-arithmetic
@@ -2661,7 +2658,7 @@
          (result (maru-all-transforms ctx src)))
     (and (binding-exists? ctx "-") (binding-exists? ctx "+")
          (binding-exists? ctx "*") (binding-exists? ctx "/")
-         (eq-object result (mk-number "21")))))
+         (eq-object result (mk-number 21)))))
 
 (deftest test-maru-primitive-ordering
   (let* ((ctx (maru-initialize))
@@ -2691,7 +2688,7 @@
          ; did we add 'lambda' successfully
     (and (member lambda-sym (maru-context-symbols ctx) :test #'eq-object)
          ; does the lambda compute the value?
-         (eq-object (mk-number "40")
+         (eq-object (mk-number 40)
                     (maru-all-transforms ctx "(fn 2 (fn 3 4))")))))
 
 (deftest test-maru-primitive-if-empty-else
@@ -2706,7 +2703,7 @@
          (src1 "(define fn (lambda (x) (+ 200 x)))"))
     (maru-all-transforms ctx src0)
     (maru-all-transforms ctx src1)
-    (eq-object (mk-number "300")
+    (eq-object (mk-number 300)
                (maru-all-transforms ctx "(fn a)"))))
 
 (deftest test-maru-pass-cons-to-lambda
@@ -2715,7 +2712,7 @@
          (src1 "(define fn (lambda (l) (car (cdr l))))"))
     (maru-all-transforms ctx src0)
     (maru-all-transforms ctx src1)
-    (eq-object (mk-number "2")
+    (eq-object (mk-number 2)
                (maru-all-transforms ctx "(fn k)"))))
 
 (deftest test-maru-lambda-no-mutate-scalar
@@ -2728,9 +2725,9 @@
                                (cons s j)))
                   (fn s))")
          (ess "(block s)"))
-    (and (eq-object (mk-pair (mk-number "30") (mk-number "45"))
+    (and (eq-object (mk-pair (mk-number 30) (mk-number 45))
                     (maru-all-transforms ctx src0))
-         (eq-object (mk-number "30")
+         (eq-object (mk-number 30)
                     (maru-all-transforms ctx ess)))))
 
 (deftest test-maru-lambda-mutate-cons-cell
@@ -2742,9 +2739,9 @@
          (cee "(cons (car c) (cdr c))"))    ; hack to get value of c
     (maru-all-transforms ctx src0)
     (maru-all-transforms ctx src1)
-    (and (eq-object (mk-number "5005")
+    (and (eq-object (mk-number 5005)
                     (maru-all-transforms ctx src2))
-         (eq-object (mk-pair (mk-number "5005") (mk-number "2002"))
+         (eq-object (mk-pair (mk-number 5005) (mk-number 2002))
                     (maru-all-transforms ctx cee)))))
 
 (deftest test-maru-primitive-block
@@ -2754,9 +2751,9 @@
                   (set-car a 15)
                   100)")
          (a "(cons (car a) (cdr a))"))
-    (and (eq-object (mk-number "100")
+    (and (eq-object (mk-number 100)
                     (maru-all-transforms ctx src0))
-         (eq-object (mk-pair (mk-number "15") (mk-number "2"))
+         (eq-object (mk-pair (mk-number 15) (mk-number 2))
                     (maru-all-transforms ctx a))
          ;; empty block should return nil
          (eq-object (maru-all-transforms ctx "(block)")
@@ -2773,9 +2770,9 @@
                                 300))
                   (fn g))")
          (gee "(cons (car g) (cdr g))"))
-    (and (eq-object (mk-number "300")
+    (and (eq-object (mk-number 300)
                     (maru-all-transforms ctx src0))
-         (eq-object (mk-pair (mk-number "20") (mk-number "13"))
+         (eq-object (mk-pair (mk-number 20) (mk-number 13))
                     (maru-all-transforms ctx gee)))))
 
 (deftest test-fetch-applicator
@@ -2787,11 +2784,11 @@
                               (type-of a)
                               (lambda args 2)))"))
     (declare (special *ctx*))
-    (and (null (fetch-applicator (mk-number "1")))
+    (and (null (fetch-applicator (mk-number 1)))
          (null (fetch-applicator (mk-raw 2 2)))
          (progn
            (maru-all-transforms *ctx* src)
-           (and (null (fetch-applicator (mk-number "500")))
+           (and (null (fetch-applicator (mk-number 500)))
                 (typep (fetch-applicator (mk-raw 2 2))
                        'runtime-closure-object))))))
 
@@ -2804,12 +2801,12 @@
                               (lambda args (cons 55 args))))")
         (use-it "(cons (a 1 2 3) (a \"this\"))"))
     (maru-all-transforms ctx src)
-    (eq-object (mk-pair (mk-list (mk-number "55")
+    (eq-object (mk-pair (mk-list (mk-number 55)
                                  (mk-raw 3 3)
-                                 (mk-number "1")
-                                 (mk-number "2")
-                                 (mk-number "3"))
-                        (mk-list (mk-number "55")
+                                 (mk-number 1)
+                                 (mk-number 2)
+                                 (mk-number 3))
+                        (mk-list (mk-number 55)
                                  (mk-raw 3 3)
                                  (mk-string :value "this")))
                (maru-all-transforms ctx use-it))))
@@ -2825,9 +2822,9 @@
          (a "(block a)"))
     ;; the define inside of the lambda only affects things outside of
     ;; the lambda because define works at global scope
-    (and (eq-object (mk-pair (mk-number "1") (mk-number "3"))
+    (and (eq-object (mk-pair (mk-number 1) (mk-number 3))
                     (maru-all-transforms ctx src0))
-         (eq-object (mk-number "20")
+         (eq-object (mk-number 20)
                     (maru-all-transforms ctx a)))))
 
 (deftest test-binding-precedence-2
@@ -2839,9 +2836,9 @@
                                a))
                   (fn a))")
          (a "(block a)"))
-    (and (eq-object (mk-pair (mk-number "550") (mk-number "3"))
+    (and (eq-object (mk-pair (mk-number 550) (mk-number 3))
                     (maru-all-transforms ctx src0))
-         (eq-object (mk-pair (mk-number "550") (mk-number "3"))
+         (eq-object (mk-pair (mk-number 550) (mk-number 3))
                     (maru-all-transforms ctx a)))))
 
 (deftest test-let-create-new-bindings-bug
@@ -2852,7 +2849,7 @@
                  (let ((a 15))
                    100)
                  a)"))
-    (eq-object (mk-number "30")
+    (eq-object (mk-number 30)
                (maru-all-transforms ctx src))))
 
 (deftest test-maru-spawn-child-env
@@ -2860,12 +2857,12 @@
         (child-ctx nil))
     (maru-intern ctx "this")
     ;; global
-    (maru-define ctx (maru-intern ctx "that") (mk-number "15"))
+    (maru-define ctx (maru-intern ctx "that") (mk-number 15))
     (setf child-ctx (maru-spawn-child-env ctx))
     (maru-intern child-ctx "somethang")
     ;; global
     (maru-define child-ctx (maru-intern child-ctx "theother")
-                           (mk-number "16"))
+                           (mk-number 16))
          ;; added stuff to parent env?
     (and (not (binding-exists? ctx "this"))
          (member (mk-symbol "this") (maru-context-symbols ctx)
@@ -2917,9 +2914,9 @@
                   (mk-list (mk-string :value "yes")))))
 
 (deftest test-maru-list
-  (let ((list-object (mk-list (mk-number "1") (mk-string :value "yes")
+  (let ((list-object (mk-list (mk-number 1) (mk-string :value "yes")
                               (mk-string :value "goat"))))
-    (and (eq-object (mk-number "1") (maru-car list-object))
+    (and (eq-object (mk-number 1) (maru-car list-object))
          (eq-object (mk-string :value "yes")
                     (maru-car (maru-cdr list-object)))
          (eq-object (mk-list (mk-string :value "yes")
@@ -2957,8 +2954,8 @@
   (let* ((ctx (maru-initialize))
          (list (mk-pair (mk-string :value "cyber")
                         (mk-pair (mk-string :value "space")
-                                 (mk-pair (mk-number "12")
-                                          (mk-number "15")))))
+                                 (mk-pair (mk-number 12)
+                                          (mk-number 15)))))
          (src0 "(define list (cons \"cyber\" (cons \"space\"
                                                    (cons 12 15))))")
          (src1 "(set-car list 100)")
@@ -2968,7 +2965,7 @@
     (maru-all-transforms ctx src0)
     ; does car mutation work?
     (maru-all-transforms ctx src1)
-    (and (eq-object (mk-number "100")
+    (and (eq-object (mk-number 100)
                     (maru-all-transforms ctx car-list))
          (eq-object (maru-cdr list)
                     (maru-all-transforms ctx cdr-list))
@@ -2976,9 +2973,9 @@
          (progn
            (maru-all-transforms ctx src2)
            t)
-         (eq-object (mk-number "100")
+         (eq-object (mk-number 100)
                     (maru-all-transforms ctx car-list))
-         (eq-object (mk-number "250")
+         (eq-object (mk-number 250)
                     (maru-all-transforms ctx cdr-list)))))
 
 (deftest test-maru-macro-symbol-eval-bug
@@ -2990,14 +2987,14 @@
                   (define tt 10)
                   (define ff (lambda (tt) 5))
                   (ff 12))"))
-    (eq-object (mk-number "5") (maru-all-transforms ctx src0))))
+    (eq-object (mk-number 5) (maru-all-transforms ctx src0))))
 
 (deftest test-maru-set-macro-primitive
   (let* ((ctx (maru-initialize))
          (src0 "(block
                   (define set-something (lambda (x y) (+ x y)))
                   (set (something 15) 20))"))
-    (eq-object (mk-number "35")
+    (eq-object (mk-number 35)
                (maru-all-transforms ctx src0))))
 
 (deftest test-maru-set-runtime-primitive
@@ -3006,7 +3003,7 @@
                   (define yesterday 55)
                   (set yesterday 34)
                   yesterday)"))
-    (eq-object (mk-number "34")
+    (eq-object (mk-number 34)
                (maru-all-transforms ctx src0))))
 
 (deftest test-maru-let-primitive
@@ -3017,7 +3014,7 @@
                                      (c 30))
                                  (+ (+ a b) c))))
                   (fn 5 7))"))
-    (eq-object (mk-number "57")
+    (eq-object (mk-number 57)
                (maru-all-transforms ctx src0))))
 
 (deftest test-maru-let-primitive-bug
@@ -3036,9 +3033,9 @@
                  (let ((b (define a 250) 5 6))
                    b))")
          (a "(block a)"))
-    (and (eq-object (mk-number "6")
+    (and (eq-object (mk-number 6)
                     (maru-all-transforms ctx src))
-         (eq-object (mk-number "250")
+         (eq-object (mk-number 250)
                     (maru-all-transforms ctx a)))))
 
 (deftest test-maru-empty-list-bug
@@ -3056,11 +3053,11 @@
                     (set out (cons i out))
                     (set i (+ i 1)))
                   out)"))
-    (eq-object (mk-pair (mk-number "2")
-                        (mk-pair (mk-number "1")
-                                 (mk-pair (mk-number "0")
-                                          (mk-pair (mk-number "10")
-                                                   (mk-number "10")))))
+    (eq-object (mk-pair (mk-number 2)
+                        (mk-pair (mk-number 1)
+                                 (mk-pair (mk-number 0)
+                                          (mk-pair (mk-number 10)
+                                                   (mk-number 10)))))
                (maru-all-transforms ctx src0))))
 
 (deftest test-maru-pair?-primitive
@@ -3085,8 +3082,8 @@
                    (cons (+ a b) c)))")
          (use-it "(fn 1 2 3 4 5)"))
     (maru-all-transforms ctx src)
-    (eq-object (mk-list (mk-number "3") (mk-number "3")
-                        (mk-number "4") (mk-number "5"))
+    (eq-object (mk-list (mk-number 3) (mk-number 3)
+                        (mk-number 4) (mk-number 5))
                (maru-all-transforms ctx use-it))))
 
 (deftest test-maru-assq
@@ -3105,8 +3102,8 @@
                    (define alist '((3 33) (4 44) (5 55)))
                    (cons (assq 4 alist) (assq \"12\" alist)))"))
     (maru-all-transforms ctx code)
-    (eq-object (mk-pair (mk-list (mk-number "4")
-                                 (mk-number "44"))
+    (eq-object (mk-pair (mk-list (mk-number 4)
+                                 (mk-number 44))
                         (maru-nil))
                (maru-all-transforms ctx use-it))))
 
@@ -3150,7 +3147,7 @@
 (deftest test-maru-string-length-primitive
   (let ((ctx (maru-initialize))
         (code "(string-length (string 55))"))
-    (eq-object (mk-number "55")
+    (eq-object (mk-number 55)
                (maru-all-transforms ctx code))))
 
 (deftest test-maru-string-at-primitive
@@ -3172,9 +3169,9 @@
 (deftest test-maru-list-primitive
   (let ((ctx (maru-initialize))
         (src "(_list 1 2 (_list \"three\" (_list 4)) \"five\")"))
-    (eq-object (mk-list (mk-number "1") (mk-number "2")
+    (eq-object (mk-list (mk-number 1) (mk-number 2)
                         (mk-list (mk-string :value "three")
-                                 (mk-list (mk-number "4")))
+                                 (mk-list (mk-number 4)))
                         (mk-string :value "five"))
                (maru-all-transforms ctx src))))
 
@@ -3196,9 +3193,9 @@
                 (define a (array 5))
                 (set-array-at a 2 3))")
         (use-it "(block a)"))
-    (and (eq-object (mk-number "3")
+    (and (eq-object (mk-number 3)
                     (maru-all-transforms ctx src))
-         (eq-object (mk-array 5 (maru-nil) (maru-nil) (mk-number "3")
+         (eq-object (mk-array 5 (maru-nil) (maru-nil) (mk-number 3)
                                 (maru-nil) (maru-nil))
                     (maru-all-transforms ctx use-it)))))
 
@@ -3283,7 +3280,7 @@
     (dolist (d def-src)
       (maru-all-transforms ctx d))
     (maru-all-transforms ctx ll-src)
-    (eq-object (mk-pair (mk-number "0") (mk-number "4"))
+    (eq-object (mk-pair (mk-number 0) (mk-number 4))
                (maru-all-transforms ctx use-it))))
 
 (deftest test-maru-map
@@ -3301,7 +3298,7 @@
     (dolist (d def-src)
       (maru-all-transforms ctx d))
     (maru-all-transforms ctx src)
-    (eq-object (mk-list (mk-number "2") (mk-number "3") (mk-number "4"))
+    (eq-object (mk-list (mk-number 2) (mk-number 3) (mk-number 4))
                (maru-all-transforms ctx use-it))))
 
 ;; FIXME: this seems to be close; but not quite right, hard to test
@@ -3311,11 +3308,11 @@
         (use-it-0 "`(1 (2) 3)")
         (use-it-1 "`9"))
     (maru-all-transforms ctx src)
-    (and (eq-object (mk-list (mk-number "1")
-                             (mk-list (mk-number "2"))
-                             (mk-number "3"))
+    (and (eq-object (mk-list (mk-number 1)
+                             (mk-list (mk-number 2))
+                             (mk-number 3))
                     (maru-all-transforms ctx use-it-0))
-         (eq-object (mk-number "9")
+         (eq-object (mk-number 9)
                     (maru-all-transforms ctx use-it-1)))))
 
 ;; FIXME: macro expansion is broken
@@ -3324,7 +3321,7 @@
         (src (quasiquote-src))
         (use-it "``5"))
     (maru-all-transforms ctx src)
-    (eq-object (mk-list (mk-symbol "quasiquote") (mk-number "5"))
+    (eq-object (mk-list (mk-symbol "quasiquote") (mk-number 5))
                (maru-all-transforms ctx use-it))))
 
 (deftest test-maru-quasiquote-3
@@ -3336,9 +3333,9 @@
                         (mk-list (mk-list
                                    (mk-symbol "quote")
                                    (mk-symbol "thing"))
-                                 (mk-number "1")
-                                 (mk-number "2")
-                                 (mk-number "3")))
+                                 (mk-number 1)
+                                 (mk-number 2)
+                                 (mk-number 3)))
                (maru-all-transforms ctx use-it))))
 
 (deftest test-maru-%list->array
@@ -3354,11 +3351,11 @@
                    (define l '(1 2 3 (4) 5))
                    (%list->array l 0))"))
     (maru-all-transforms ctx src)
-    (eq-object (mk-array 5 (mk-number "1")
-                           (mk-number "2")
-                           (mk-number "3")
-                           (mk-list (mk-number "4"))
-                           (mk-number "5"))
+    (eq-object (mk-array 5 (mk-number 1)
+                           (mk-number 2)
+                           (mk-number 3)
+                           (mk-list (mk-number 4))
+                           (mk-number 5))
                (maru-all-transforms ctx use-it))))
 
 (defun concat-symbol-src ()
@@ -3455,9 +3452,9 @@
     (maru-all-transforms ctx src)
     (maru-all-transforms ctx long-struct)
     (setf test-raw (mk-raw 0 1))
-    (setf (svref (raw-object-mem test-raw) 0) (mk-number "10"))
+    (setf (svref (raw-object-mem test-raw) 0) (mk-number 10))
     (eq-object (mk-pair test-raw
-                        (mk-pair (mk-number "10") (mk-number "10")))
+                        (mk-pair (mk-number 10) (mk-number 10)))
                (maru-all-transforms ctx use-it))))
 
 (deftest test-maru-closure-context
@@ -3468,7 +3465,7 @@
                     (+ c d))))")
         (use-it "(fn 5)"))
     (maru-all-transforms ctx src)
-    (eq-object (mk-number "7")
+    (eq-object (mk-number 7)
                (maru-all-transforms ctx use-it))))
 
 (deftest test-maru-global-counter
@@ -3483,9 +3480,9 @@
         (use-it-1 "(block
                      (inc) (reset) (reset) (reset))"))
     (maru-all-transforms ctx src)
-    (and (eq-object (mk-number "1")
+    (and (eq-object (mk-number 1)
                     (maru-all-transforms ctx use-it-0))
-         (eq-object (mk-number "0")
+         (eq-object (mk-number 0)
                     (maru-all-transforms ctx use-it-1)))))
 
 (deftest test-maru-closure-counter
@@ -3498,9 +3495,9 @@
         (use-it-1 "(block
                      (reset) (inc) (reset) (inc) (inc))"))
     (maru-all-transforms ctx src)
-    (and (eq-object (mk-number "3")
+    (and (eq-object (mk-number 3)
                     (maru-all-transforms ctx use-it-0))
-         (eq-object (mk-number "2")
+         (eq-object (mk-number 2)
                     (maru-all-transforms ctx use-it-1)))))
 
 (deftest test-maru-doesnt-require-quote-nil
@@ -3521,19 +3518,19 @@
                 (define b 44))")
         (use-it "(block (cons a b))"))
     (maru-all-transforms ctx src)
-    (eq-object (mk-pair (mk-number "10")
-                        (mk-number "44"))
+    (eq-object (mk-pair (mk-number 10)
+                        (mk-number 44))
                (maru-all-transforms ctx use-it))))
 
 (deftest test-quote-pairing@typing
   (let ((ctx (maru-initialize))
         (src0 "'(1 2 a)")
         (src1 "'5"))
-    (and (eq-object (mk-list (mk-number "1")
-                             (mk-number "2")
+    (and (eq-object (mk-list (mk-number 1)
+                             (mk-number 2)
                              (mk-symbol "a"))
                      (maru-all-transforms ctx src0))
-         (eq-object (mk-number "5")
+         (eq-object (mk-number 5)
                     (maru-all-transforms ctx src1)))))
 
 (deftest test-macros-simple
@@ -3544,7 +3541,7 @@
                     '(define b 2))))")
         (use-it "(m 1)"))
     (maru-all-transforms ctx src)
-    (eq-object (mk-number "2")
+    (eq-object (mk-number 2)
                (maru-all-transforms ctx use-it))))
 
 (deftest test-macros
@@ -3562,7 +3559,7 @@
                         (gn (fn 5))))))")
         (use-it "(m)"))
     (maru-all-transforms ctx src)
-    (eq-object (mk-pair (mk-number "50") (mk-number "50"))
+    (eq-object (mk-pair (mk-number 50) (mk-number 50))
                (maru-all-transforms ctx use-it))))
 
 (deftest test-macros-2
@@ -3575,8 +3572,8 @@
     (maru-all-transforms ctx (quasiquote-src))
     (maru-all-transforms ctx src)
     (eq-object (maru-all-transforms ctx src1)
-               (mk-list (mk-number "1") (mk-number "2") (mk-number "3")
-                        (mk-number "4") (mk-number "5")))))
+               (mk-list (mk-number 1) (mk-number 2) (mk-number 3)
+                        (mk-number 4) (mk-number 5)))))
 
 (deftest test-macros-3
   (let ((ctx (maru-initialize))
@@ -3613,21 +3610,21 @@
     (maru-all-transforms ctx (quasiquote-src))
     (maru-all-transforms ctx src0)
     (maru-all-transforms ctx src1)
-    (eq-object (mk-number "16")
+    (eq-object (mk-number 16)
                (maru-all-transforms ctx src2))))
 |#
 
 (deftest test-list-conversion
-  (let ((maru-list-0 (mk-list (mk-number "1") (mk-number "2")
-                              (mk-list (mk-number "3") (mk-number "4"))
-                              (mk-list (mk-number "5") (mk-number "6"))
-                              (mk-number "7")))
-        (maru-list (mk-list (mk-number "1")
-                            (mk-number "2")
-                            (mk-list (mk-number "9")
-                                     (mk-number "0"))
-                            (mk-list (mk-list (mk-number "2"))
-                                     (mk-number "0")))))
+  (let ((maru-list-0 (mk-list (mk-number 1) (mk-number 2)
+                              (mk-list (mk-number 3) (mk-number 4))
+                              (mk-list (mk-number 5) (mk-number 6))
+                              (mk-number 7)))
+        (maru-list (mk-list (mk-number 1)
+                            (mk-number 2)
+                            (mk-list (mk-number 9)
+                                     (mk-number 0))
+                            (mk-list (mk-list (mk-number 2))
+                                     (mk-number 0)))))
     (and (eq-object (internal-list-to-maru-list
                       (maru-list-to-internal-list maru-list-0))
                     maru-list-0)
@@ -3636,25 +3633,25 @@
                     maru-list))))
 
 (deftest test-internal-list-to-maru-list-improper
-  (let ((list`((,(mk-number "3") . ,(mk-number "2")) . ,(mk-number "9"))))
-    (eq-object (mk-pair (mk-pair (mk-number "3") (mk-number "2"))
-                        (mk-number "9"))
+  (let ((list`((,(mk-number 3) . ,(mk-number 2)) . ,(mk-number 9))))
+    (eq-object (mk-pair (mk-pair (mk-number 3) (mk-number 2))
+                        (mk-number 9))
                (internal-list-to-maru-list list))))
 
 (deftest test-maru-list-pair-sanity
        ;; nil and pairs are lists
   (and (maru-list? (maru-nil))
-       (maru-list? (mk-pair (mk-number "3") (mk-number "4")))
-       (maru-list? (mk-list (mk-number "5") (mk-number "5")))
+       (maru-list? (mk-pair (mk-number 3) (mk-number 4)))
+       (maru-list? (mk-list (mk-number 5) (mk-number 5)))
        ;; other things are not lists
-       (not (maru-list? (mk-number "12")))
+       (not (maru-list? (mk-number 12)))
        (not (maru-list? (make-instance 'basic-object)))
        ;; everything other than pairs are atoms
        (maru-atom? (maru-nil))
-       (maru-atom? (mk-number "4"))
+       (maru-atom? (mk-number 4))
        (maru-atom? (mk-string :value "whatever"))
-       (not (maru-atom? (mk-list (mk-number "4"))))
-       (not (maru-atom? (mk-pair (mk-number "9") (mk-number "10"))))))
+       (not (maru-atom? (mk-list (mk-number 4))))
+       (not (maru-atom? (mk-pair (mk-number 9) (mk-number 10))))))
 
 (deftest test-maru-nil-sanity
        ;; only nil is nil
@@ -3662,7 +3659,7 @@
        ;; nil is the empty list
        (maru-nil? (mk-list))
        (not (maru-nil? (mk-list "this" "that")))
-       (not (maru-nil? (mk-pair (mk-number "2") (mk-number "9"))))
+       (not (maru-nil? (mk-pair (mk-number 2) (mk-number 9))))
        (not (maru-nil? (mk-pair (maru-nil) (maru-nil))))))
 
 (deftest test-noop-transform-improper-list
@@ -3724,12 +3721,12 @@
         (transform noop-transformer untyped-expr ctx)))))
 
 (deftest test-maru-proper?
-  (and (maru-proper? (mk-pair (mk-number "1") (maru-nil)))
+  (and (maru-proper? (mk-pair (mk-number 1) (maru-nil)))
        (maru-proper? (mk-list))
-       (not (maru-proper? (mk-pair (mk-number "2") (mk-number "3"))))
-       (not (maru-proper? (mk-pair (mk-number "1")
-                                   (mk-pair (mk-number "9")
-                                            (mk-number "99")))))))
+       (not (maru-proper? (mk-pair (mk-number 2) (mk-number 3))))
+       (not (maru-proper? (mk-pair (mk-number 1)
+                                   (mk-pair (mk-number 9)
+                                            (mk-number 99)))))))
 
 (deftest test-imaru-list
   "uses a symbol for the lambda lists; capture all arguments"
@@ -3743,7 +3740,7 @@
 (deftest test-negative-number-bug
   (let ((ctx (maru-initialize))
         (src "(define a -10)"))
-    (eq-object (mk-number "-10")
+    (eq-object (mk-number -10)
                (maru-all-transforms ctx src))))
 
 (deftest test-maru-allocate-primitive
@@ -3771,9 +3768,9 @@
         (use-it "(block
                    (define aa (allocate 0 2))
                    (set-oop-at aa 0 55))"))
-    (and (eq-object (mk-number "55")
+    (and (eq-object (mk-number 55)
                     (maru-all-transforms ctx use-it))
-         (eq-object (mk-number "55")
+         (eq-object (mk-number 55)
                     (svref (raw-object-mem
                              (maru-all-transforms ctx "(block aa)"))
                            0)))))
@@ -3792,7 +3789,7 @@
                     (maru-all-transforms ctx "(set-oop-at bb -5 10)"))
          (eq-object (maru-nil)
                     (maru-all-transforms ctx "(set-oop-at bb 9 8)"))
-         (eq-object (mk-number "23")
+         (eq-object (mk-number 23)
                     (svref (raw-object-mem
                              (maru-all-transforms ctx "(block bb)"))
                            1)))))
@@ -3804,7 +3801,7 @@
                    (set-oop-at cc 2 14)
                    (set-oop-at cc 4 8)
                    (cons (oop-at cc 2) (oop-at cc 4)))"))
-    (and (eq-object (mk-pair (mk-number "14") (mk-number "8"))
+    (and (eq-object (mk-pair (mk-number 14) (mk-number 8))
                     (maru-all-transforms ctx use-it)))))
 
 (deftest test-maru-oop-at-primitive-invalids
@@ -3835,7 +3832,7 @@
                     (+ a (+ b (+ c d))))))")
         (use-it "(set (fn 2 3 4) 5)"))
     (maru-all-transforms ctx src)
-    (eq-object (mk-number "14")
+    (eq-object (mk-number 14)
                (maru-all-transforms ctx use-it))))
 
 (deftest test-imaru-array->string
@@ -3897,7 +3894,7 @@
 (deftest test-maru-or-primitive
   (let ((ctx (maru-initialize))
         (src "(cons (or () () 4) (or 2 5))"))
-    (eq-object (mk-pair (mk-number "4") (mk-number "2"))
+    (eq-object (mk-pair (mk-number 4) (mk-number 2))
                (maru-all-transforms ctx src))))
 
 (deftest test-maru-eval-primitive
@@ -3905,12 +3902,12 @@
         (src "(block
                 (define a 10)
                 (cons (eval 'a) (eval '(+ 1 2))))"))
-    (eq-object (mk-pair (mk-number "10") (mk-number "3"))
+    (eq-object (mk-pair (mk-number 10) (mk-number 3))
                (maru-all-transforms ctx src))))
 
 (deftest test-maru-type-of-primitive
   (let ((ctx (maru-initialize)))
-    (and (eq-object (mk-number "13")
+    (and (eq-object (mk-number 13)
                     (maru-all-transforms ctx "(type-of (allocate 13 0))"))
          (must-signal bad-type-of
            (maru-all-transforms ctx "(type-of 5)")))))
