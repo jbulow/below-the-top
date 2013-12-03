@@ -24,6 +24,7 @@
 ;;;;   imaru (longs)
 ;;;; > abstract typecasing of function-object applications
 ;;;; > runtime-closure-object should be in the function-object hierarchy?
+;;;; > mk-number take integer argument
 ;;;;
 ;;;; NOTES
 ;;;; . forwarding dispatches to symbol objects (because things that
@@ -366,6 +367,9 @@
 (define-condition exit-program-signal (error)
   ((code :initarg :code)))
 
+(define-condition bad-type-of (error)
+  ())
+
 (defclass maru-env ()
   ((bindings :accessor maru-env-bindings
              :initarg  :bindings
@@ -572,10 +576,16 @@
                      (mk-expr #'maru-primitive-pair?))
     (maru-define ctx (maru-intern ctx "symbol?")
                      (mk-expr #'maru-primitive-symbol?))
+    (maru-define ctx (maru-intern ctx "type-of")
+                     (mk-expr #'maru-primitive-type-of))
     (maru-define ctx (maru-intern ctx "apply")
                      (mk-expr #'maru-primitive-apply))
+    (maru-define ctx (maru-intern ctx "eval")
+                     (mk-expr #'maru-primitive-eval))
     (maru-define ctx (maru-intern ctx "print")
                      (mk-expr #'maru-primitive-print))
+    (maru-define ctx (maru-intern ctx "dump")
+                     (mk-expr #'maru-primitive-dump))
     ;; extension
     (maru-define ctx (maru-intern ctx "_list")
                      (mk-expr #'maru-primitive-_list))
@@ -880,7 +890,15 @@
   (mk-bool (maru-symbol? (maru-car args))))
 
 ; expr
-; args <- function, args, environment
+(defun maru-primitive-type-of (ctx args)
+  (declare (ignore ctx))
+  (assert (= 1 (maru-length args)))
+  (when (not (typep (maru-car args) 'raw-object))
+    (error 'bad-type-of))
+  (mk-number (to-string (raw-object-type (maru-car args)))))
+
+; expr
+; args <- function, [args], [environment]
 (defun maru-primitive-apply (ctx args)
   (assert (and (<= (maru-length args) 3)))
                ; (typep (maru-car args) 'function-object)))
@@ -892,8 +910,25 @@
     (maru-apply fn fn-args ctx)))
 
 ; expr
+; args <- expression, [environment]
+(defun maru-primitive-eval (ctx args)
+  (assert (and (<= (maru-length args) 2)))
+  (let ((expr (maru-car args))
+        (env (maru-caddr args)))
+    ;; FIXME: use env if provided
+    (or env (assert nil))
+    ;; expansion ---> evaluation
+    (maru-expand->eval ctx expr)))
+
+; expr
 ; FIXME: make nicer output/match imaru
 (defun maru-primitive-print (ctx args)
+  (declare (ignore ctx))
+  (funcall #'format t "~A" (maru-printable-object args)))
+
+; expr
+; FIXME: make nicer output/match imaru
+(defun maru-primitive-dump (ctx args)
   (declare (ignore ctx))
   (funcall #'format t "~A" (maru-printable-object args)))
 
@@ -2323,19 +2358,16 @@
 (defun type-expr (ctx src)
   (transform (maru-typer) (untype-expr src) ctx))
 
-(defun maru-all-transforms (ctx src)
+(defun maru-expand->eval (ctx expr)
   (let ((expand-transformer (make-transformer :name 'expand))
         (pseudoexpand-transformer (make-transformer :name 'pseudoexpand))
         (eval-transformer (make-transformer :name 'eval))
-        (typed-expr (type-expr ctx src))
         (expanded-expr nil)
         (pexpanded-expr nil)
         (evald-expr nil))
-    ; (when (atom typed-expr)
-        ; (format t "TYPED: ~A~%" (maru-printable-object typed-expr)))
     (setf expanded-expr
           (transform expand-transformer
-                     typed-expr
+                     expr
                      ctx
                      :tfuncs (maru-tfuncs)))
     ; (when (atom expanded-expr)
@@ -2357,6 +2389,11 @@
         ; (format t "EVALD : ~A~%" (maru-printable-object evald-expr)))
     evald-expr))
 
+(defun maru-all-transforms (ctx src)
+  (let ((typed-expr (type-expr ctx src)))
+    ; (when (atom typed-expr)
+        ; (format t "TYPED: ~A~%" (maru-printable-object typed-expr)))
+    (maru-expand->eval ctx typed-expr)))
 
 (deftest test-maru-eval-with-fixed
   (let* ((ctx (maru-initialize))
@@ -3672,13 +3709,25 @@
                (maru-all-transforms ctx src))))
 
 (deftest test-maru-eval-primitive
-  nil)
+  (let ((ctx (maru-initialize))
+        (src "(block
+                (define a 10)
+                (cons (eval 'a) (eval '(+ 1 2))))"))
+    (eq-object (mk-pair (mk-number "10") (mk-number "3"))
+               (maru-all-transforms ctx src))))
 
 (deftest test-maru-type-of-primitive
-  nil)
+  (let ((ctx (maru-initialize)))
+    (and (eq-object (mk-number "13")
+                    (maru-all-transforms ctx "(type-of (allocate 13 0))"))
+         (must-signal bad-type-of
+           (maru-all-transforms ctx "(type-of 5)")))))
 
 (deftest test-maru-dump-primitive
-  nil)
+  (let ((ctx (maru-initialize))
+        (src "(dump 567)"))
+    (maru-all-transforms ctx src)
+    nil))
 
 (deftest test-maru-symbol?-primitive
   (let ((ctx (maru-initialize))
