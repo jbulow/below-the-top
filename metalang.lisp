@@ -1495,12 +1495,23 @@
 ;;; > hardcoded semantics for evaluation composition
 
 ;; FIXME: implement
-(defun applicator-from-internal (type)
-  (declare (ignore type))
+(defmethod fetch-applicator ((object basic-object))
+  (declare (special *ctx*))
+  (when (typep object 'raw-object)
+    (let ((apps (array-object-elements
+                  (maru-lookup *ctx* (mk-symbol "*applicators*")))))
+      (when (not (maru-nil? (svref apps (raw-object-type object))))
+        (return-from fetch-applicator
+          (svref apps (raw-object-type object))))))
   nil)
 
 ;;;;;;;;;; basic object ;;;;;;;;;;
-; > use *applicators*
+;;; we could support *evaluators* and *applicators* here
+;;; > if an *evaluator* exists; don't talk to the arguments and call it
+;;;   from ``pass''
+;;; > if an *applicator* exists; evaluate the arguments and call it from
+;;;   ``pass''
+; > currently only support *applicators*
 
 ;; if a type does not have a specific evaluation semantic; it just
 ;; evaluates to itself
@@ -1509,24 +1520,19 @@
                    (whatami (eql 'arg)))
   `(nil . ,object))
 
-(defmethod inform :around ((object basic-object)
-                           (transformer-name (eql 'eval))
-                           (whatami (eql 'arg)))
-  (cond ((applicator-from-internal (type-of object))
-         (error "args shouldn't get messages if there is an applicator"))
-        (t (assert (next-method-p)) (call-next-method))))
-
 (defmethod inform ((object basic-object)
                    (transformer-name (eql 'eval))
                    (whatami (eql 'lead)))
   (error (format nil "implement eval inform for ~A lead~%"
                  (type-of object))))
 
+;; FIXME: implement *evaluators*
 (defmethod inform :around ((object basic-object)
                            (transformer-name (eql 'eval))
                            (whatami (eql 'lead)))
-  (cond ((applicator-from-internal (type-of object)) nil)
-         (t (assert (next-method-p)) (call-next-method))))
+  ; (cond ((fetch-applicator object) nil)
+        ; (t (assert (next-method-p)) (call-next-method))))
+  (assert (next-method-p)) (call-next-method))
 
 (defmethod pass ((object basic-object)
                  (trasformer-name (eql 'eval))
@@ -1534,12 +1540,12 @@
   (error (format nil "implement eval pass for ~A~%"
                  (type-of object))))
 
-;; FIXME: implement
 (defmethod pass :around ((object basic-object)
                          (transformer-name (eql 'eval))
                          (args list-object))
-  (let ((applicator (applicator-from-internal (type-of object))))
-    (cond (applicator (error "call the applicator and pass args!"))
+  (declare (special *ctx*))
+  (let ((applicator (fetch-applicator object)))
+    (cond (applicator `(nil . ,(maru-apply applicator args *ctx*)))
           (t (assert (next-method-p)) (call-next-method)))))
 
 ;;;;;;;;;; symbol object ;;;;;;;;;;
@@ -1667,6 +1673,7 @@
                    (whatami (eql 'arg)))
   `(nil . ,object))
 
+;; FIXME: support lead numbers
 (defmethod inform ((object number-object)
                    (transformer-name (eql 'eval))
                    (whatami (eql 'lead)))
@@ -1696,6 +1703,24 @@
                  (args list-object))
   (error "no expand passing at eval time"))
   ; `(nil . ,(mk-pair object args)))
+
+;;;;;;;;;; raw object ;;;;;;;;;;
+
+(defmethod inform ((object raw-object)
+                   (transformer-name (eql 'eval))
+                   (whatami (eql 'arg)))
+  `(nil . ,object))
+
+(defmethod inform ((object raw-object)
+                   (transformer-name (eql 'eval))
+                   (whatami (eql 'lead)))
+  nil)
+
+(defmethod pass ((object raw-object)
+                 (transformer-name (eql 'eval))
+                 (args list-object))
+  `(nil . ,(mk-pair object args)))
+
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; maru pseudoexpansion transformer
@@ -2618,9 +2643,39 @@
          (eq-object (mk-pair (mk-number "20") (mk-number "13"))
                     (maru-all-transforms ctx gee)))))
 
-(deftest test-applicator-from-internal
-  "should be able to take an applicator and get it's internal function"
-  nil)
+(deftest test-fetch-applicator
+  "get an applicator for some object"
+  (let ((*ctx* (maru-initialize))
+        (src "(block
+                (define a (allocate 2 2))
+                (set-array-at *applicators*
+                              (type-of a)
+                              (lambda args 2)))"))
+    (declare (special *ctx*))
+    (and (null (fetch-applicator (mk-number "1")))
+         (null (fetch-applicator (mk-raw 2 2)))
+         (progn
+           (maru-all-transforms *ctx* src)
+           (and (null (fetch-applicator (mk-number "500")))
+                (typep (fetch-applicator (mk-raw 2 2))
+                       'runtime-closure-object))))))
+
+(deftest test-maru-applicators
+  (let ((ctx (maru-initialize))
+        (src "(block
+                (define a (allocate 3 3))
+                (set-array-at *applicators*
+                              (type-of a)
+                              (lambda args (cons 55 args))))")
+        (use-it "(cons (a 1 2 3) (a \"this\"))"))
+    (maru-all-transforms ctx src)
+    (eq-object (mk-pair (mk-list (mk-number "55")
+                                 (mk-number "1")
+                                 (mk-number "2")
+                                 (mk-number "3"))
+                        (mk-list (mk-number "55")
+                                 (mk-string :value "this")))
+               (maru-all-transforms ctx use-it))))
 
 (deftest test-binding-precedence
   (let* ((ctx (maru-initialize))
