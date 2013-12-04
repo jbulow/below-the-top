@@ -643,6 +643,8 @@
                      (mk-expr #'maru-primitive-string-at))
     (maru-define ctx (maru-intern ctx "set-string-at")
                      (mk-expr #'maru-primitive-set-string-at))
+    (maru-define ctx (maru-intern ctx "long->string")
+                     (mk-expr #'maru-primitive-long->string))
     (maru-define ctx (maru-intern ctx "string->symbol")
                      (mk-expr #'maru-primitive-string->symbol))
     (maru-define ctx (maru-intern ctx "symbol->string")
@@ -673,6 +675,12 @@
                      (mk-expr #'maru-primitive-exit))
     (maru-define ctx (maru-intern ctx "abort")
                      (mk-expr #'maru-primitive-abort))
+    ;; environment
+    (maru-define ctx (maru-intern ctx "current-environment")
+                     (mk-expr #'maru-primitive-current-environment))
+    ;; > extension
+    (maru-define ctx (maru-intern ctx "_global-environment")
+                     (mk-expr #'maru-primitive-_global-environment))
 
     ;; compositioners
     (maru-define ctx (maru-intern ctx "*expanders*") (mk-array 32))
@@ -720,6 +728,9 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;      maru primitives
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define-condition missing-feature (error)
+  ())
 
 ; form
 (defun maru-primitive-quote (ctx args)
@@ -1074,6 +1085,18 @@
 
 ; expr
 ; > IDL: imaru implementation ignores extra args
+(defun maru-primitive-long->string (ctx args)
+  (declare (ignore ctx))
+  (cond ((zerop (maru-length args)) (maru-nil))
+        ((typep (maru-car args) 'string-object) (maru-car args))
+        ((typep (maru-car args) 'number-object)
+         (mk-string :value (object-value (maru-car args))))
+        ((typep (maru-car args) 'char-object)
+         (error 'missing-feature))
+        (t (maru-nil))))
+
+; expr
+; > IDL: imaru implementation ignores extra args
 (defun maru-primitive-string->symbol (ctx args)
   (cond ((zerop (maru-length args)) (maru-nil))
         ((typep (maru-car args) 'symbol-object) (maru-car args))
@@ -1219,6 +1242,17 @@
   (declare (ignore ctx args))
   (format t "aborted~%")
   (error 'exit-program-signal :code 1))
+
+; expr
+; > FIXME: this behavior is an approximation of correctness/imaru
+(defun maru-primitive-current-environment (ctx args)
+  (assert (zerop (maru-length args)))
+  (internal-list-to-maru-list (maru-env-bindings (maru-context-env ctx))))
+
+; expr
+(defun maru-primitive-_global-environment (ctx args)
+  (assert (zerop (maru-length args)))
+  (internal-list-to-maru-list (maru-env-bindings (maru-root-env ctx))))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -1484,6 +1518,9 @@
     (and (eql (raw-object-type lhs) (raw-object-type rhs))
          (eq-vector (raw-object-mem lhs) (raw-object-mem rhs)
                     :test #'eq-object)))
+  ;; functions
+  (:method ((lhs function-object) (rhs function-object))
+    (eq (function-object-fn lhs) (function-object-fn rhs)))
   ;; catch all
   (:method (lhs rhs)
     nil))
@@ -4016,3 +4053,33 @@
     (eq-object (mk-pair (mk-bool t) (mk-bool nil))
                (maru-all-transforms ctx src))))
 
+;; FIXME: test for more sophisticated behavior;
+;; > environments in lambdas
+(deftest test-maru-current-environment-primitive
+  (let ((ctx (maru-initialize))
+        (src "(current-environment)"))
+    (eq-object (internal-list-to-maru-list
+                 (maru-env-bindings (maru-context-env ctx)))
+               (maru-all-transforms ctx src))))
+
+(deftest test-maru-_global-environment-primitive
+  "_global-environment is an extension that lets us avoid using *globals*"
+  (let ((ctx (maru-initialize))
+        (src "(_global-environment)"))
+    (eq-object (internal-list-to-maru-list
+                 (maru-env-bindings (maru-context-env ctx)))
+               (maru-all-transforms ctx src))))
+
+(deftest test-maru-primitive-long->string
+  (let ((ctx (maru-initialize))
+        (src "(long->string 12)"))
+    (eq-object (mk-string :value "12")
+               (maru-all-transforms ctx src))))
+
+(deftest test-maru-primitive-long->string-with-char
+  (let ((ctx (maru-initialize))
+        (src "(long->string ?a)"))
+    (declare (ignore ctx src))
+    nil))
+    ; (eq-object (mk-string :value "a")
+               ; (maru-all-transforms ctx src))))
