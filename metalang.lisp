@@ -174,8 +174,6 @@
   (do ((c (funcall next-char-fn) (funcall next-char-fn)))
       ((or (eq c nil) (char-equal c #\Newline)))
     nil)
-  ;; remove the possible newline
-  (funcall next-char-fn)
   (tokenize next-char-fn read-table))
 
 (defun read-macro? (c read-table)
@@ -1598,7 +1596,6 @@
   (let ((typed-lead (type-it *ctx* object)))
     `(nil . ,(mk-pair typed-lead (internal-list-to-maru-list args)))))
 
-
 ;;;;;;;;;; list as lead ;;;;;;;;;;
 
 (defmethod inform ((list list)
@@ -1617,6 +1614,21 @@
   (declare (special *ctx*))
   `(nil . ,(cons (transform (maru-typer) list *ctx*) args)))
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; _very_ generic maru transformers
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(defmethod inform ((list pair-object)
+                   transformer-name
+                   (whatami (eql 'lead)))
+  t)
+
+(defmethod pass ((list pair-object)
+                 transformer-name
+                 (args list-object))
+  (declare (special *ctx* *tfuncs*))
+  (let ((tformer (make-transformer :name transformer-name)))
+    `(nil . ,(mk-pair (transform tformer list *ctx* :tfuncs *tfuncs*)
+                      args))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;  maru evalutator transformer
@@ -2017,19 +2029,6 @@
       `(nil . ,*forwarding-symbol*)
       `(nil . ,pair)))
 
-;; FIXME: do the right thing
-(defmethod inform ((list pair-object)
-                   (transformer-name (eql 'expand))
-                   (whatami (eql 'lead)))
-  t)
-
-;; FIXME: do the right thing
-(defmethod pass ((list pair-object)
-                 (transformer-name (eql 'expand))
-                 (args list-object))
-  (declare (special *ctx*))
-  (cons nil (tcons list args)))
-
 ;;;;;;;;;; fixed lead ;;;;;;;;;;
 
 (defmethod inform ((object fixed-object)
@@ -2055,8 +2054,8 @@
 
 ;; > the imaru execution model does all transformations on one
 ;; sexpression before moving on
-(defun process-file (path)
-  (let ((ctx (maru-initialize))
+(defun process-file (path &optional ctx)
+  (let ((ctx (or ctx (maru-initialize)))
         (src (read-file path)))
     (do ((count 0 count))
                    ;; kludge
@@ -3730,6 +3729,29 @@
     (eq-object (mk-number 16)
                (maru-all-transforms ctx src2))))
 |#
+
+(deftest test-macros-lead-pair-expansion-bug
+  "macros in let bindings must expand"
+  (let ((ctx (maru-initialize))
+        (macro
+          "(define m
+             (form
+               (lambda (a)
+                 '(+ 1 2))))")
+        (src
+          "(let ((a (m 2)))
+             a)"))
+    (maru-all-transforms ctx macro)
+    (eq-object (mk-number 3)
+               (maru-all-transforms ctx src))))
+
+(deftest test-eval-lead-pair
+  (let ((ctx (maru-initialize))
+        (src "(block
+                (define two (lambda (a b) (+ a b)))
+                ((car '(two three)) 1 2))"))
+    (eq-object (mk-list (mk-symbol "two") (mk-number 1) (mk-number 2))
+               (maru-all-transforms ctx src))))
 
 (deftest test-list-conversion
   (let ((maru-list-0 (mk-list (mk-number 1) (mk-number 2)
