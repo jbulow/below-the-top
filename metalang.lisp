@@ -559,7 +559,7 @@
     (maru-define ctx (maru-intern ctx "or")
                      (mk-fixed #'maru-primitive-or))
     (maru-define ctx (maru-intern ctx "not")
-                     (mk-fixed #'maru-primitive-not))
+                     (mk-expr #'maru-primitive-not))
     (maru-define ctx (maru-intern ctx "define")
                      (mk-fixed #'maru-primitive-define))
     ;; extension
@@ -762,7 +762,7 @@
 (defun maru-primitive-car (ctx args)
   (declare (ignore ctx))
   (assert (and (= 1 (maru-length args))
-               (typep (maru-car args) 'pair-object)))
+               (typep (maru-car args) 'list-object)))
   (maru-car (maru-car args)))
 
 ; expr
@@ -775,7 +775,7 @@
 (defun maru-primitive-cdr (ctx args)
   (declare (ignore ctx))
   (assert (and (= 1 (maru-length args))
-               (typep (maru-car args) 'pair-object)))
+               (typep (maru-car args) 'list-object)))
   (maru-cdr (maru-car args)))
 
 ; expr
@@ -3093,6 +3093,12 @@
                     (maru-all-transforms ctx car-list))
          (eq-object (mk-number 250)
                     (maru-all-transforms ctx cdr-list)))))
+
+(deftest test-maru-car/cdr-nil-bug
+  (let* ((ctx (maru-initialize))
+         (src "(cons (car ()) (cdr ()))"))
+    (eq-object (mk-list (maru-nil))
+               (maru-all-transforms ctx src))))
 
 (deftest test-maru-macro-symbol-eval-bug
   ~"this bug is hard to test for; other than to say that this should run;"
