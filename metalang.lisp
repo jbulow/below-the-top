@@ -176,6 +176,30 @@
     nil)
   (tokenize next-char-fn read-table))
 
+;; FIXME: should just return the character as number; no question mark
+(defun qmark-handler (next-char-fn read-table)
+  (declare (ignore read-table))
+  (labels ((handle-escaped (c)
+             (case c
+               (#\a #\Bel)                      ;; alert/bell
+               (#\b #\Backspace)
+               (#\f #\Page)                     ;; formfeed
+               (#\n #\Newline)
+               (#\r #\Return)
+               (#\t #\Tab)
+               (#\v #\Vt)                       ;; vertical tab
+               (#\' #\')
+               (#\u (error 'missing-feature))
+               (#\x (error 'missing-feature))
+               ((0 1 2 3 4 5 6 7) (error 'missing-feature))
+               (otherwise (if (alphanumericp c)
+                              (error "illegal character escape")
+                              c)))))
+    (let ((char (funcall next-char-fn)))
+      (cond ((char= #\\ char)
+             (scat "?" (handle-escaped (funcall next-char-fn))))
+            (t (scat "?" char))))))
+
 (defun read-macro? (c read-table)
   (assoc c read-table :test #'char=))
 
@@ -1393,7 +1417,7 @@
   ())
 
 (defun mk-char (value)
-  (assert (typep value 'standard-char))
+  (assert (typep value 'base-char))
   (make-instance 'char-object :value value))
 
 (defclass bool-object (single-value-object)
@@ -1566,6 +1590,7 @@
                  (mk-number (parse-integer (subseq val 2 len) :radix 16)))
                (mk-number (parse-integer val))))
           ((char= #\? first-char)
+           (assert (= 2 len))
            (mk-char (char val 1)))
           ((graphic-char-p first-char) (maru-intern ctx val))
           (t (error "unsure how to do type conversion")))))
@@ -2476,6 +2501,24 @@
          (member (mk-symbol "kk") (maru-context-symbols ctx)
                  :test #'eq-object))))
 
+(deftest test-type-escaped-char-bug
+  (let ((ctx (maru-initialize))
+        (src "(something ?\\a ?\\b ?\\t ?\\n ?\\v ?\\f ?\\r ?\\\\ ?\\')")
+        (typed-expr
+          (mk-list (mk-symbol "something") (mk-char #\Bel)
+                   (mk-char #\Backspace)   (mk-char #\Tab)
+                   (mk-char #\Newline)     (mk-char #\Vt)
+                   (mk-char #\Page)        (mk-char #\Return)
+                   (mk-char #\\)           (mk-char #\'))))
+    (eq-object typed-expr (type-expr ctx src))))
+
+(deftest test-type-space-char-bug
+  (let ((ctx (maru-initialize))
+        (src "(else ?\ ? )")
+        (typed-expr (mk-list (mk-symbol "else") (mk-char #\Space)
+                             (mk-char #\Space))))
+   (eq-object typed-expr (type-expr ctx src))))
+
 (deftest test-maru-define
   (let* ((ctx (maru-mk-ctx))
          (obj (mk-number 4001))
@@ -2605,7 +2648,7 @@
   (let* ((read-table '((#\' . quote-handler) (#\, . unquote-handler)
                        (#\` . quasiquote-handler)
                        (#\" . doublequote-handler)
-                       (#\; . semicolon-handler)))
+                       (#\; . semicolon-handler) (#\? . qmark-handler)))
          (factory (next-char-factory src))
          (untyped (untype-everything (tokenize factory read-table))))
     (values untyped (funcall factory 'count))))
