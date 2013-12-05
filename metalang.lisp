@@ -516,16 +516,17 @@
   (:method ((object pair-object))
     (scat "("
           (let ((first nil))
-            (flet ((sp ()
-                     (if first " " (progn (setf first t) ""))))
-              (let ((out ""))
-                (dopair (e (maru-list-to-internal-list-1 object) out)
-                  (setf out
-                        (scat out (sp) (maru-printable-object (car e))))
-                  (cond ((null (cdr e)) (return out))
-                        ((atom (cdr e))
-                         (setf out (scat out " . " (maru-printable-object
-                                                     (cdr e))))))))))
+            (labels ((sp ()
+                       (if first " " (progn (setf first t) "")))
+                     (print-list (list &optional (out ""))
+                       (setf out
+                             (scat out (sp) (maru-printable-object (car list))))
+                       (cond ((null (cdr list)) out)
+                             ((atom (cdr list))
+                              (scat out " . " (maru-printable-object
+                                                (cdr list))))
+                             (t (print-list (cdr list) out)))))
+              (print-list (maru-list-to-internal-list-1 object))))
           ")"))
   (:method ((object raw-object))
     (format nil "<raw-object :type => ~A, :size => ~A>"
