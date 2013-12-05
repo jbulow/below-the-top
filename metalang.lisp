@@ -356,11 +356,20 @@
         (transform transformer (cdr response) *ctx*)
         (cdr response))))
 
-(defun back-talk-sexpr (transformer lead &key expr-args)
+(defparameter *stack-trace* (maru-nil))
+
+(defun st ()
+  (let ((i 0))
+    (dolist (e (maru-list-to-internal-list-1 *stack-trace*))
+      (format t "~A: ~A~%" (1- (incf i)) (maru-printable-object e)))))
+
+(defun back-talk-sexpr (transformer lead expr-args)
   (declare (special *ctx* *tfuncs*))
   (assert (tproper? expr-args))
-  ;; response : can-i-talk-to-your-arguments?
-  (let* ((response (inform lead (transformer-name transformer) 'lead))
+  (let* ((*stack-trace* (mk-pair (mk-pair lead expr-args)
+                                 *stack-trace*))
+         ;; response : can-i-talk-to-your-arguments?
+         (response (inform lead (transformer-name transformer) 'lead))
          (args (tmapcar
                  #'(lambda (a)
                      (if response
@@ -396,7 +405,7 @@
             (t
               (back-talk-sexpr transformer
                                (tcar expr)
-                               :expr-args (tcdr expr)))))))
+                               (tcdr expr)))))))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -1800,7 +1809,7 @@
   (declare (special *ctx*))
   (let ((binding (maru-lookup *ctx* object)))
     (if binding
-        (pass binding 'eval args)      ; must forward to actual function
+        (pass binding 'eval args)
         (error (format nil "'~A' is undefined" (object-value object))))))
 
 
