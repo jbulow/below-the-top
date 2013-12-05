@@ -50,6 +50,8 @@
 ;;;;   > we also want to avoid duplicating expand semantics into pexpand
 ;;;;     handlers; currently we use the *pseudoexpansion* identifier and
 ;;;;     the form-helper function, not totally clean
+;;;; . metacircularities (shortcircuited by operators/forms in emit.l)
+;;;;   > oop-at/set-oop-at
 
 (proclaim '(optimize (debug 3)))
 
@@ -532,7 +534,7 @@
   (:method ((object single-value-object))
     (object-value object))
   (:method ((object string-object))
-    (scat "\"" (object-value object) "\""))
+    (scat "\"" (reverse (subseq (reverse (object-value object)) 1))  "\""))
   (:method ((object function-object))
     "<generic-function-object>")
   (:method ((object runtime-closure-object))
@@ -4173,12 +4175,14 @@
     (maru-all-transforms ctx use-it)
     nil))
 
-(defparameter *now* nil)
 (deftest test-print-newlines
   (let ((ctx (maru-initialize))
         (src "(print \"top\\nbottom\")"))
-    (let ((*now* t))
-      (maru-all-transforms ctx src))))
+    (let* ((stream (make-string-output-stream))
+           (*standard-output* stream))
+      (maru-all-transforms ctx src)
+      (string= (scat "\"top" #\Newline "bottom\"")
+               (get-output-stream-string stream)))))
 
 (deftest test-maru-exit-primitive
   (let ((ctx (maru-initialize))
