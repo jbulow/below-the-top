@@ -22,9 +22,10 @@
 ;;;;   for strings?
 ;;;; > fix the disparity between chars and numbers that doesn't exist in
 ;;;;   imaru (longs)
-;;;; > abstract typecasing of function-object applications
-;;;; > runtime-closure-object should be in the function-object hierarchy?
-;;;; > mk-number take integer argument
+;;;; > missing primitives
+;;;;   + read
+;;;;   + fixed?
+;;;;   + form?
 ;;;;
 ;;;; NOTES
 ;;;; . forwarding dispatches to symbol objects (because things that
@@ -94,6 +95,7 @@
     (reverse exprs)))
 
 ;; caller must _know_ that the first character is 'valid'
+;; FIXME: should terminate on read macros
 (defun tokenize-characters (next-char-fn &optional (so-far ""))
   (let ((c (funcall next-char-fn)))
     (assert (not (string= c 'negative-space)))
@@ -492,6 +494,8 @@
     "<nil>")
   (:method ((object single-value-object))
     (object-value object))
+  (:method ((object string-object))
+    (scat "\" " (object-value object) " \""))
   (:method ((object function-object))
     "<generic-function-object>")
   (:method ((object runtime-closure-object))
@@ -659,6 +663,8 @@
     ;; strings
     (maru-define ctx (maru-intern ctx "string")
                      (mk-expr #'maru-primitive-string))
+    (maru-define ctx (maru-intern ctx "string?")
+                     (mk-expr #'maru-primitive-string?))
     (maru-define ctx (maru-intern ctx "string-length")
                      (mk-expr #'maru-primitive-string-length))
     (maru-define ctx (maru-intern ctx "string-at")
@@ -783,29 +789,35 @@
            (maru-cadr args)))
 
 ; expr
+; IDL: imaru says the car of a non list object is nil
 (defun maru-primitive-car (ctx args)
   (declare (ignore ctx))
-  (assert (and (= 1 (maru-length args))
-               (typep (maru-car args) 'list-object)))
+  (assert (and (= 1 (maru-length args))))
+  (when (not (typep (maru-car args) 'list-object))
+    (return-from maru-primitive-car (maru-nil)))
   (maru-car (maru-car args)))
 
 ; expr
 (defun maru-primitive-set-car (ctx args)
   (declare (ignore ctx))
-  (assert (= 2 (maru-length args)))
+  (assert (and (= 2 (maru-length args))
+               (typep (maru-car args) 'list-object)))
   (setf (pair-object-car (maru-car args)) (maru-cadr args)))
 
 ; expr
+; IDL: imaru says the cdr of a non list object is nil
 (defun maru-primitive-cdr (ctx args)
   (declare (ignore ctx))
-  (assert (and (= 1 (maru-length args))
-               (typep (maru-car args) 'list-object)))
+  (assert (and (= 1 (maru-length args))))
+  (when (not (typep (maru-car args) 'list-object))
+    (return-from maru-primitive-cdr (maru-nil)))
   (maru-cdr (maru-car args)))
 
 ; expr
 (defun maru-primitive-set-cdr (ctx args)
   (declare (ignore ctx))
-  (assert (= 2 (maru-length args)))
+  (assert (and (= 2 (maru-length args))
+               (typep (maru-car args) 'list-object)))
   (setf (pair-object-cdr (maru-car args)) (maru-cadr args)))
 
 ; expr
@@ -892,8 +904,11 @@
 ; expr
 (defun maru-primitive-sub (ctx args)
   (declare (ignore ctx))
-  (mk-number (- (object-value (maru-car args))
-                (object-value (maru-cadr args)))))
+  (assert (member (maru-length args) '(1 2)))
+  (if (= 1 (maru-length args))
+      (mk-number (- (object-value (maru-car args))))
+      (mk-number (- (object-value (maru-car args))
+                    (object-value (maru-cadr args))))))
 
 ; expr
 (defun maru-primitive-mul (ctx args)
@@ -1015,9 +1030,24 @@
 (defun maru-primitive-type-of (ctx args)
   (declare (ignore ctx))
   (assert (= 1 (maru-length args)))
-  (when (not (typep (maru-car args) 'raw-object))
-    (error 'bad-type-of))
-  (mk-number (raw-object-type (maru-car args))))
+  (cond ((typep (maru-car args) 'raw-object)
+         (mk-number (raw-object-type (maru-car args))))
+        (t ;; hardcoded into imaru
+          (mk-number
+            (typecase (maru-car args)
+              (nil-object               0)
+              (number-object            1)
+              (char-object              1)
+              (string-object            2)
+              (symbol-object            3)
+              (pair-object              4)
+              (array-object             6)
+              (runtime-closure-object   7)
+              (form-object              8)
+              (pseudoform-object        8)      ;; HACK
+              (fixed-object             9)
+              (expr-object              10)
+              (otherwise (error "unrecognized type")))))))
 
 ; expr
 ; args <- function, [args], [environment]
@@ -1046,7 +1076,8 @@
 ; FIXME: make nicer output/match imaru
 (defun maru-primitive-print (ctx args)
   (declare (ignore ctx))
-  (funcall #'format t "~A" (maru-printable-object args)))
+  (dolist (a (maru-list-to-internal-list-1 args))
+    (funcall #'format t "~A" (maru-printable-object a))))
 
 ; expr
 ; FIXME: make nicer output/match imaru
@@ -1071,6 +1102,12 @@
   (assert (and (= 1 (maru-length args))
                (typep (maru-car args) 'number-object)))
   (mk-string :size (object-value (maru-car args))))
+
+; expr
+(defun maru-primitive-string? (ctx args)
+  (declare (ignore ctx))
+  (assert (= 1 (maru-length args)))
+  (mk-bool (typep (maru-car args) 'string-object)))
 
 ; expr
 (defun maru-primitive-string-length (ctx args)
@@ -1238,6 +1275,11 @@
     ;; accout for the imaru nil exception
     (when (maru-nil? (maru-car args))
       (return-from maru-primitive-oop-at (maru-nil)))
+    ;; HACK (required in gen-definition <expr>)
+    (when (typep raw 'runtime-closure-object)
+      (assert (= 0 (object-value index)))
+      (return-from maru-primitive-oop-at
+        (runtime-closure-object-src raw)))
     ;; fail if we try to use set-oop-at on non raw objects (other than
     ;; nil)
     (assert (typep raw 'raw-object))
@@ -1743,7 +1785,7 @@
   (declare (special *ctx*))
   (let ((binding (maru-lookup *ctx* object)))
     (if binding
-        (pass binding 'eval args)       ; must forward to actual function
+        (pass binding 'eval args)      ; must forward to actual function
         (error (format nil "'~A' is undefined" (object-value object))))))
 
 
@@ -2084,7 +2126,7 @@
         (src (read-file path)))
     (do ((count 0 count))
                    ;; kludge
-        ((>= count (- (length src) 10)) ctx)
+        ((>= count (- (length src) 5)) ctx)
       (multiple-value-bind (out new-count)
           (maru-all-transforms ctx (subseq src count))
         (declare (ignore out))
@@ -2203,8 +2245,6 @@
          ;; now unread and again grab the last character
          (funcall next-char-fn 'unread)
          (char= #\e (funcall next-char-fn 'read)))))
-
-
 
 (deftest test-tsugar
   (let-sugar (std-tfuncs)
@@ -2811,6 +2851,12 @@
          (binding-exists? ctx "%")
          (eq-object result (mk-number 21)))))
 
+(deftest test-maru-primitive-unary-subtraction
+  (let* ((ctx (maru-initialize))
+         (src "(- 10)"))
+    (eq-object (mk-number -10)
+               (maru-all-transforms ctx src))))
+
 (deftest test-maru-primitive-ordering
   (let* ((ctx (maru-initialize))
          (src "(block
@@ -3307,6 +3353,12 @@
   (let ((ctx (maru-initialize))
         (code "(string 20)"))
     (eq-object (mk-string :size 20)
+               (maru-all-transforms ctx code))))
+
+(deftest test-maru-string?-primitive
+  (let ((ctx (maru-initialize))
+        (code "(cons (string? 12) (string? (string 5)))"))
+    (eq-object (mk-pair (mk-bool nil) (mk-bool t))
                (maru-all-transforms ctx code))))
 
 (deftest test-maru-string-length-primitive
@@ -4094,11 +4146,18 @@
                (maru-all-transforms ctx src))))
 
 (deftest test-maru-type-of-primitive
-  (let ((ctx (maru-initialize)))
+  (let ((ctx (maru-initialize))
+        (src "(type-of (allocate 13 0))"))
     (and (eq-object (mk-number 13)
-                    (maru-all-transforms ctx "(type-of (allocate 13 0))"))
-         (must-signal bad-type-of
-           (maru-all-transforms ctx "(type-of 5)")))))
+                    (maru-all-transforms ctx src)))))
+
+(deftest test-maru-type-of-primitive-hardcodes
+  (let ((ctx (maru-initialize))
+        (src "(_list (type-of 1) (type-of 'a) (type-of \"a\")
+                     (type-of string?))"))
+   (and (eq-object (mk-list (mk-number 1) (mk-number 3) (mk-number 2)
+                            (mk-number 10))
+                   (maru-all-transforms ctx src)))))
 
 (deftest test-maru-dump-primitive
   (let ((ctx (maru-initialize))
