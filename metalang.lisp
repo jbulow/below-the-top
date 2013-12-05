@@ -495,7 +495,7 @@
   (:method ((object single-value-object))
     (object-value object))
   (:method ((object string-object))
-    (scat "\" " (object-value object) " \""))
+    (scat "\"" (object-value object) "\""))
   (:method ((object function-object))
     "<generic-function-object>")
   (:method ((object runtime-closure-object))
@@ -515,9 +515,17 @@
           "]"))
   (:method ((object pair-object))
     (scat "("
-          (maru-printable-object (pair-object-car object))
-          " . "
-          (maru-printable-object (pair-object-cdr object))
+          (let ((first nil))
+            (flet ((sp ()
+                     (if first " " (progn (setf first t) ""))))
+              (let ((out ""))
+                (dopair (e (maru-list-to-internal-list-1 object) out)
+                  (setf out
+                        (scat out (sp) (maru-printable-object (car e))))
+                  (cond ((null (cdr e)) (return out))
+                        ((atom (cdr e))
+                         (setf out (scat out " . " (maru-printable-object
+                                                     (cdr e))))))))))
           ")"))
   (:method ((object raw-object))
     (format nil "<raw-object :type => ~A, :size => ~A>"
@@ -751,7 +759,10 @@
   (assert (maru-list? maru-list))
   (cond ((maru-nil? maru-list) '())
         (t (cons (maru-car maru-list)
-                 (maru-list-to-internal-list-1 (maru-cdr maru-list))))))
+                 (if (not (maru-list? (maru-cdr maru-list)))
+                     (maru-cdr maru-list)
+                     (maru-list-to-internal-list-1
+                       (maru-cdr maru-list)))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;      maru primitives
