@@ -162,13 +162,53 @@
   (let ((quoted (tokenize next-char-fn read-table)))
     (list "quasiquote" quoted)))
 
+(defun octal? (char)
+  (member char '(#\0 #\1 #\2 #\3 #\4 #\5 #\6 #\7)))
+
+(defun handle-escaped (next-char-fn)
+  (let ((char (funcall next-char-fn)))
+    (case char
+      (#\a #\Bel)                      ;; alert/bell
+      (#\b #\Backspace)
+      (#\f #\Page)                     ;; formfeed
+      (#\n #\Newline)
+      (#\r #\Return)
+      (#\t #\Tab)
+      (#\v #\Vt)                       ;; vertical tab
+      (#\' #\')
+      (#\u (error 'missing-feature))
+      (#\x (error 'missing-feature))
+      ((#\0 #\1 #\2 #\3 #\4 #\5 #\6 #\7)
+       (let ((second nil)
+             (third nil)
+             (value nil))
+         (setf value (digit-char-p char))
+
+         ;; second digit
+         (setf second (funcall next-char-fn))
+         (unless (octal? second)
+           (funcall next-char-fn 'unread)
+           (return-from handle-escaped (code-char value)))
+         (setf value (+ (digit-char-p second) (* 8 value)))
+
+         ;; third digit
+         (setf third (funcall next-char-fn))
+         (unless (octal? third)
+           (funcall next-char-fn 'unread)
+           (return-from handle-escaped (code-char value)))
+
+         (code-char (+ (digit-char-p third) (* 8 value)))))
+      (otherwise (if (alphanumericp char)
+                    (error "illegal character escape")
+                    char)))))
+
 (defun doublequote-handler (next-char-fn read-table)
   (declare (ignore read-table))
   (let ((output ""))
     (do ((c (funcall next-char-fn) (funcall next-char-fn)))
         ((char-equal c #\") output)
       (when (char-equal #\\ c)
-        (setf c (funcall next-char-fn)))
+        (setf c (handle-escaped next-char-fn)))
       (setf output (scat output c)))
     (scat "\"" output "\"")))
 
@@ -181,26 +221,10 @@
 ;; FIXME: should just return the character as number; no question mark
 (defun qmark-handler (next-char-fn read-table)
   (declare (ignore read-table))
-  (labels ((handle-escaped (c)
-             (case c
-               (#\a #\Bel)                      ;; alert/bell
-               (#\b #\Backspace)
-               (#\f #\Page)                     ;; formfeed
-               (#\n #\Newline)
-               (#\r #\Return)
-               (#\t #\Tab)
-               (#\v #\Vt)                       ;; vertical tab
-               (#\' #\')
-               (#\u (error 'missing-feature))
-               (#\x (error 'missing-feature))
-               ((0 1 2 3 4 5 6 7) (error 'missing-feature))
-               (otherwise (if (alphanumericp c)
-                              (error "illegal character escape")
-                              c)))))
-    (let ((char (funcall next-char-fn)))
-      (cond ((char= #\\ char)
-             (scat "?" (handle-escaped (funcall next-char-fn))))
-            (t (scat "?" char))))))
+  (let ((char (funcall next-char-fn)))
+    (cond ((char= #\\ char)
+           (scat "?" (handle-escaped next-char-fn)))
+          (t (scat "?" char)))))
 
 (defun read-macro? (c read-table)
   (assoc c read-table :test #'char=))
@@ -357,10 +381,13 @@
         (cdr response))))
 
 (defparameter *stack-trace* (maru-nil))
+(defparameter *stack-depth* 10)
 
 (defun st ()
   (let ((i 0))
     (dolist (e (maru-list-to-internal-list-1 *stack-trace*))
+      (when (= *stack-depth* i)
+        (return))
       (format t "~A: ~A~%" (1- (incf i)) (maru-printable-object e)))))
 
 (defun back-talk-sexpr (transformer lead expr-args)
@@ -727,6 +754,11 @@
     ;; > extension
     (maru-define ctx (maru-intern ctx "_global-environment")
                      (mk-expr #'maru-primitive-_global-environment))
+    ;; debugging extensions
+    (maru-define ctx (maru-intern ctx "stack-trace")
+                     (mk-expr #'maru-primitive-stack-trace))
+    (maru-define ctx (maru-intern ctx "break")
+                     (mk-expr #'maru-primitive-break))
 
     ;; compositioners
     (maru-define ctx (maru-intern ctx "*expanders*") (mk-array 32))
@@ -1102,7 +1134,8 @@
 (defun maru-primitive-print (ctx args)
   (declare (ignore ctx))
   (dolist (a (maru-list-to-internal-list-1 args))
-    (funcall #'format t "~A" (maru-printable-object a))))
+    (funcall #'format t "~A" (maru-printable-object a)))
+  (finish-output))
 
 ; expr
 ; FIXME: make nicer output/match imaru
@@ -1342,6 +1375,17 @@
 (defun maru-primitive-_global-environment (ctx args)
   (assert (zerop (maru-length args)))
   (internal-list-to-maru-list (maru-env-bindings (maru-root-env ctx))))
+
+; expr
+(defun maru-primitive-stack-trace (ctx args)
+  (declare (ignore ctx args))
+  (st)
+  (maru-nil))
+
+; expr
+(defun maru-primitive-break (ctx args)
+  (declare (ignore ctx args))
+  (maru-nil))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -2140,7 +2184,7 @@
       (multiple-value-bind (out new-count)
           (maru-all-transforms ctx (subseq src count))
         (declare (ignore out))
-        ; (format t "C: ~A~%" count)
+        (format t "C: ~A~%" count)
         (setf count (+ count new-count))))))
 
 
@@ -4119,7 +4163,7 @@
                 (define println
                    (lambda args
                      (apply print args)
-                     (%print \"\n\"))))")
+                     (%print \"\\n\"))))")
         (use-it "(block
                    (define a 10)
                    (println \"hello \" a \"world\"))"))
@@ -4128,6 +4172,13 @@
     ;; FIXME: test the output of some stream
     (maru-all-transforms ctx use-it)
     nil))
+
+(defparameter *now* nil)
+(deftest test-print-newlines
+  (let ((ctx (maru-initialize))
+        (src "(print \"top\\nbottom\")"))
+    (let ((*now* t))
+      (maru-all-transforms ctx src))))
 
 (deftest test-maru-exit-primitive
   (let ((ctx (maru-initialize))
@@ -4223,3 +4274,19 @@
     nil))
     ; (eq-object (mk-string :value "a")
                ; (maru-all-transforms ctx src))))
+
+(deftest test-read-octal
+  (let ((ctx (maru-initialize))
+        (src "(block \"\\124\")"))
+    (eq-object (mk-string :value (to-string (code-char #o124)))
+               (maru-all-transforms ctx src))))
+
+(deftest test-read-octal-partial
+  (let ((ctx (maru-initialize))
+        (src "(block \"\\12abc\\5def\")"))
+    (eq-object (mk-string :value (scat (to-string (code-char #o12))
+                                       "abc"
+                                       (to-string (code-char #o5))
+                                       "def"))
+               (maru-all-transforms ctx src))))
+
