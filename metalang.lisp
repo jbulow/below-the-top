@@ -382,7 +382,8 @@
 (defun transform (transformer expr ctx &key (tfuncs (std-tfuncs)))
   (let-sugar tfuncs
     (let ((*ctx* ctx)
-          (*tfuncs* tfuncs))    ; necessary for recursive calls
+          (*tfuncs* tfuncs)             ; necessary for recursive calls
+          (*forwarding-symbol* nil))    ; no forward from recursive calls
       (declare (special *ctx* *tfuncs*))
       (cond ((tnull expr) (tnil))
             ((tatom expr)
@@ -516,8 +517,7 @@
   (:method ((object pair-object))
     (scat "("
           (let ((first nil))
-            (labels ((sp ()
-                       (if first " " (progn (setf first t) "")))
+            (labels ((sp () (if first " " (progn (setf first t) "")))
                      (print-list (list &optional (out ""))
                        (setf out
                              (scat out (sp) (maru-printable-object (car list))))
@@ -1884,9 +1884,8 @@
             (setf params (maru-nil))
             (setf values (maru-nil)))
       (assert (and (maru-nil? params) (maru-nil? values)))
-    ;; apply the function in the lexical env
-    `(nil . ,(nice-eval (maru-cadr (runtime-closure-object-src object))
-                        :_ctx child-ctx)))))
+      ;; apply the function in the lexical env
+      `(nil . ,(nice-eval (maru-cadr src) :_ctx child-ctx)))))
 
 ;;;;;;;;;; number object ;;;;;;;;;;
 
@@ -2000,7 +1999,6 @@
 (defmethod inform ((object basic-object)
                    (transformer-name (eql 'expand))
                    (whatami (eql 'arg)))
-  (declare (special *forwarding-symbol*))
   (if *forwarding-symbol*
       `(nil . ,*forwarding-symbol*)
       `(nil . ,object)))
@@ -2013,7 +2011,6 @@
 (defmethod pass ((object basic-object)
                  (trasformer-name (eql 'expand))
                  (args list-object))
-  (declare (special *forwarding-symbol*))
   (if *forwarding-symbol*
       `(nil . ,(tcons *forwarding-symbol* args))
       `(nil . ,(tcons object args))))
@@ -2024,26 +2021,24 @@
 (defmethod inform ((object symbol-object)
                    (transformer-name (eql 'expand))
                    (whatami (eql 'arg)))
-  (declare (special *ctx* *forwarding-symbol*))
+  (declare (special *ctx*))
   (when *forwarding-symbol*
     (return-from inform `(nil . ,*forwarding-symbol*)))
   (let ((binding (maru-lookup *ctx* object)))
     (if binding
         (let ((*forwarding-symbol* object))
-          (declare (special *forwarding-symbol*))
           (inform binding 'expand 'arg))
         `(nil . ,object))))
 
 (defmethod inform ((object symbol-object)
                    (transformer-name (eql 'expand))
                    (whatami (eql 'lead)))
-  (declare (special *ctx* *forwarding-symbol*))
+  (declare (special *ctx*))
   (when *forwarding-symbol*
     (return-from inform t))
   (let ((binding (maru-lookup *ctx* object)))
     (if binding
         (let ((*forwarding-symbol* object))
-          (declare (special *forwarding-symbol*))
           (inform binding 'expand 'lead))
         t)))
 
@@ -2051,7 +2046,7 @@
 (defmethod pass ((object symbol-object)
                  (transformer-name (eql 'expand))
                  (args list-object))
-  (declare (special *ctx* *forwarding-symbol*))
+  (declare (special *ctx*))
   (when *forwarding-symbol*
     (return-from pass `(nil . ,(tcons *forwarding-symbol* args))))
   (let ((binding (maru-lookup *ctx* object))
@@ -2060,7 +2055,6 @@
           (if *pseudoexpansion* 'pseudoexpand transformer-name)))
     (if binding
         (let ((*forwarding-symbol* object))
-          (declare (special *forwarding-symbol*))
           (pass binding real-transformer-name args))
         `(nil . ,(tcons object args)))))
 
@@ -2070,7 +2064,6 @@
 (defmethod inform ((object form-object)
                    (transformer-name (eql 'expand))
                    (whatami (eql 'arg)))
-  (declare (special *forwarding-symbol*))
   (error "form-objectz should not be arguments! ~A"
          (maru-printable-object *forwarding-symbol*)))
 
@@ -2078,7 +2071,6 @@
 (defmethod inform ((object form-object)
                    (transformer-name (eql 'expand))
                    (whatami (eql 'lead)))
-  (declare (special *forwarding-object*))
   nil)
 
 (defun form-helper (fn transformer-name args)
@@ -2086,13 +2078,11 @@
   ;; only use this with macros/pmacros
   (assert (member transformer-name '(expand pseudoexpand)
                   :test #'string=))
-  (let ((*forwarding-symbol* nil))
-    (declare (special *forwarding-symbol*))
-    ;; ???: we ignore the ctx attached to the macro lambda
-    `(nil . ,(transform (make-transformer :name transformer-name)
-                        (low-level-maru-apply fn args *ctx*)
-                        *ctx*
-                        :tfuncs *tfuncs*))))
+  ;; ???: we ignore the ctx attached to the macro lambda
+  `(nil . ,(transform (make-transformer :name transformer-name)
+                    (low-level-maru-apply fn args *ctx*)
+                    *ctx*
+                    :tfuncs *tfuncs*)))
 
 (defmethod pass ((object form-object)
                  (transformer-name (eql 'expand))
@@ -2104,7 +2094,6 @@
 (defmethod inform ((pair pair-object)
                    (transformer-name (eql 'expand))
                    (whatami (eql 'arg)))
-  (declare (special *forwarding-symbol*))
   (if *forwarding-symbol*
       `(nil . ,*forwarding-symbol*)
       `(nil . ,pair)))
@@ -2114,7 +2103,6 @@
 (defmethod inform ((object fixed-object)
                    (transformer-name (eql 'expand))
                    (whatami (eql 'lead)))
-  (declare (special *forwarding-symbol*))
   ;; HACK.
   (if *forwarding-symbol*
     (not (eq-object (mk-symbol "quote") *forwarding-symbol*))
