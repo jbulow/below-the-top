@@ -1052,6 +1052,7 @@
 ; expr
 ; args <- function, [args], [environment]
 (defun maru-primitive-apply (ctx args)
+  (declare (ignore ctx))
   (assert (and (<= (maru-length args) 3)))
                ; (typep (maru-car args) 'function-object)))
   (let ((fn (maru-car args))
@@ -1059,7 +1060,10 @@
         (fn-env (maru-caddr args)))
     ;; FIXME: use env if provided
     (or fn-env (assert nil))
-    (maru-apply fn fn-args ctx)))
+    ;; we cannot do full eval transformation here because it has already
+    ;; occurred; thus our arguments are already evaluated
+    ;; > we use ``pass'' because the around hook will handle applicators
+    (cdr (pass fn 'eval fn-args))))
 
 ; expr
 ; args <- expression, [environment]
@@ -1133,12 +1137,12 @@
   (assert (and (= 3 (maru-length args))
                (typep (maru-car args) 'string-object)
                (typep (maru-cadr args) 'number-object)
-               (typep (maru-caddr args) 'char-object)))
+               (typep (maru-caddr args) 'abstract-long-object)))
   (let ((index (object-value (maru-cadr args)))
         (char (object-value (maru-caddr args))))
     (if (and (>= index 0) (< index (string-object-size (maru-car args))))
       (progn
-        (setf (elt (object-value (maru-car args)) index) char)
+        (setf (elt (object-value (maru-car args)) index) (code-char char))
         (maru-car args))
       (maru-nil))))
 
@@ -1419,12 +1423,23 @@
 (defun maru-nil ()
   (make-instance 'nil-object))
 
-(defclass number-object (single-value-object)
+(defclass abstract-long-object (single-value-object)
+  ())
+
+(defclass number-object (abstract-long-object)
   ())
 
 (defun mk-number (value)
   (assert (typep value 'integer))
   (make-instance 'number-object :value value))
+
+(defclass char-object (abstract-long-object)
+  ())
+
+(defun mk-char (value)
+  (assert (typep value 'base-char))
+  (make-instance 'char-object :value (char-code value)))
+
 
 (defclass string-object (single-value-object)
   ())
@@ -1454,13 +1469,6 @@
     ;; care null terminator
     (assert (char= #\Null (aref val (1- (length val)))))
     (mk-symbol (subseq val 0 (1- (length val))))))
-
-(defclass char-object (single-value-object)
-  ())
-
-(defun mk-char (value)
-  (assert (typep value 'base-char))
-  (make-instance 'char-object :value value))
 
 (defclass bool-object (single-value-object)
   ())
@@ -1530,19 +1538,14 @@
    (mem  :accessor raw-object-mem
          :initarg  :mem)))
 
-(defgeneric maru-apply (fn args &optional ctx)
-  (:method ((fn runtime-closure-object) (args list-object) &optional ctx)
-    (declare (ignore ctx))
-    ;; FIXME: ignores ctx parameter
-    (cdr (pass fn 'eval args)))
-  (:method ((fn function-object) (args list-object) &optional ctx)
-    (assert (member (type-of (function-object-fn fn))
-                    '(runtime-closure-object function)
-                    :test #'string=))
-    ;; FIXME: may eat a lot of undesired/incorrect behavior?
-    (maru-apply (function-object-fn fn) args ctx))
-  (:method ((fn function) (args list-object) &optional ctx)
-    (funcall fn ctx args)))
+;; should not be used directly; use ``pass''
+(defmethod low-level-maru-apply ((fn function-object) (args list-object)
+                                 &optional ctx)
+  (let ((bound-fn (function-object-fn fn)))
+    (typecase bound-fn
+      (runtime-closure-object (cdr (pass bound-fn 'eval args)))
+      (function (funcall bound-fn ctx args))
+      (otherwise "unknown function type"))))
 
 (defun mk-raw (type size)
   (make-instance 'raw-object
@@ -1747,14 +1750,14 @@
   (error (format nil "implement eval pass for ~A~%"
                  (type-of object))))
 
+;; because we are not supporting applicators for builtins; we could just
+;; implement pass on raw-object
 (defmethod pass :around ((object basic-object)
                          (transformer-name (eql 'eval))
                          (args list-object))
   (declare (special *ctx*))
   (let ((applicator (fetch-applicator object)))
-    (cond (applicator
-            `(nil . ,(maru-apply applicator
-                                 (mk-pair object args) *ctx*)))
+    (cond (applicator (pass applicator 'eval (mk-pair object args)))
           (t (assert (next-method-p)) (call-next-method)))))
 
 ;;;;;;;;;; symbol object ;;;;;;;;;;
@@ -1805,8 +1808,7 @@
                  (transformer-name (eql 'eval))
                  (args list-object))
   (declare (special *ctx*))
-  (let ((fn (function-object-fn object)))
-    `(nil . ,(maru-apply fn args *ctx*))))
+  `(nil . ,(low-level-maru-apply object args *ctx*)))
 
 
 ;;;;;;;;;; fixed object ;;;;;;;;;;
@@ -1825,8 +1827,7 @@
                  (transformer-name (eql 'eval))
                  (args list-object))
   (declare (special *ctx*))
-  (let ((fn (function-object-fn object)))
-    `(nil . ,(maru-apply fn args *ctx*))))
+  `(nil . ,(low-level-maru-apply object args *ctx*)))
 
 ;;;;;;;;;; runtime closure object ;;;;;;;;;;
 
@@ -2077,7 +2078,7 @@
     (declare (special *forwarding-symbol*))
     ;; ???: we ignore the ctx attached to the macro lambda
     `(nil . ,(transform (make-transformer :name transformer-name)
-                        (maru-apply fn args *ctx*)
+                        (low-level-maru-apply fn args *ctx*)
                         *ctx*
                         :tfuncs *tfuncs*))))
 
