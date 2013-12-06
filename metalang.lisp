@@ -545,11 +545,6 @@
     (object-value object))
   (:method ((object string-object))
     (reverse (subseq (reverse (object-value object)) 1)))
-  (:method ((object abstract-long-object))
-    (let ((val (object-value object)))
-      (if (and (>= val 0) (alpha-char-p (code-char val)))
-          (code-char val)
-          val)))
   (:method ((object function-object))
     "<generic-function-object>")
   (:method ((object runtime-closure-object))
@@ -4233,7 +4228,7 @@
     (let* ((stream (make-string-output-stream))
            (*standard-output* stream))
       (maru-all-transforms ctx src)
-      (string= (scat "\"top" #\Newline "bottom\"")
+      (string= (scat "top" #\Newline "bottom")
                (get-output-stream-string stream)))))
 
 (deftest test-maru-exit-primitive
