@@ -1756,6 +1756,12 @@
                    (whatami (eql 'lead)))
   t)
 
+;; don't try anything fancy
+;; > ie, don't apply the transformed head to the transformed args; such
+;;   is liable to get you into an infinite loop if the transformer
+;;   doesn't change the pair-object
+;;   + we could compare the result and shortcircuit if the pair doesn't
+;;     change
 (defmethod pass ((list pair-object)
                  transformer-name
                  (args list-object))
@@ -1763,6 +1769,7 @@
   (let ((tformer (make-transformer :name transformer-name)))
     `(nil . ,(mk-pair (transform tformer list *ctx* :tfuncs *tfuncs*)
                       args))))
+
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;  maru evalutator transformer
@@ -1996,6 +2003,16 @@
                  (transformer-name (eql 'eval))
                  (args list-object))
   `(nil . ,(mk-pair object args)))
+
+
+;;;;;;;;;; pair object ;;;;;;;;;;
+
+(defmethod pass ((list pair-object)
+                 (transformer-name (eql 'eval))
+                 (args list-object))
+  (declare (special *ctx* *tfuncs*))
+  (let ((tformer (make-transformer :name transformer-name)))
+    (pass (transform tformer list *ctx* :tfuncs *tfuncs*) 'eval args)))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -4311,5 +4328,28 @@
                                        "abc"
                                        (to-string (code-char #o5))
                                        "def"))
+               (maru-all-transforms ctx src))))
+
+(deftest test-fn-to-fn-lead-bug
+  (let ((ctx (maru-initialize+))
+        (src "(block
+                (define fn
+                  (lambda ()
+                    (lambda (a)
+                      (lambda (b) (+ 1 (+ 2 (+ a b)))))))
+                (((fn) 3) 4))"))
+    (eq-object (mk-number 10)
+               (maru-all-transforms ctx src))))
+
+(deftest test-fn-to-fn-lead-bug-more
+  "args should only be evaluated once even if we evaluate lead"
+  (let ((ctx (maru-initialize+))
+        (src "(block
+                (define fn
+                  (lambda ()
+                    (lambda (a)
+                      (cons 0 a))))
+                ((fn) '(1 2)))"))
+    (eq-object (mk-list (mk-number 0) (mk-number 1) (mk-number 2))
                (maru-all-transforms ctx src))))
 
