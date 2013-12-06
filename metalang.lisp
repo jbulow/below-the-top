@@ -832,7 +832,7 @@
 ; fixed
 (defun maru-primitive-if (ctx args)
   (declare (ignore ctx))
-  (assert (member (maru-length args) '(2 3)))
+  (assert (>= (maru-length args) 2))
   (let ((test (maru-car  args))
         (then (maru-cadr args))
         (else (maru-cddr args)))
@@ -2836,6 +2836,14 @@
   (process-file *emit* (process-file *boot*))
   nil)
 
+#|
+(defun part-p ()
+  (sb-sprof:with-profiling (:max-samples 10000
+                            :report      :graph
+                            :loop        nil)
+    (process-file *emit* (process-file *boot*))))
+|#
+
 (deftest test-maru-eval-with-fixed
   (let* ((ctx (maru-initialize))
          (eval-transformer (make-transformer :name 'eval))
@@ -2995,6 +3003,20 @@
         (src "(if () 10)"))
     (eq-object (maru-nil)
                (maru-all-transforms ctx src))))
+
+(deftest test-maru-primitive-if-implicit-block-else
+  (let ((ctx (maru-initialize))
+        (src "(block
+                (define a 10)
+                (if ()
+                    10
+                    100
+                    (set a 25)
+                    15))"))
+    (and (eq-object (mk-number 15)
+                    (maru-all-transforms ctx src))
+         (eq-object (mk-number 25)
+                    (maru-all-transforms ctx "(block a)")))))
 
 (deftest test-maru-pass-scalar-to-lambda
   (let* ((ctx (maru-initialize))
