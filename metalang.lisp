@@ -420,6 +420,8 @@
             (transform transformer (cdr response-2) *ctx*)
             (cdr response-2)))))
 
+(defparameter *maru-debug* nil)
+
 ;;; transform a single expression {sexpression, atom}
 ;;; > tfuncs may only be valid for the input data format
 (defun transform (transformer expr ctx &key (tfuncs (std-tfuncs)))
@@ -428,6 +430,8 @@
           (*tfuncs* tfuncs)             ; necessary for recursive calls
           (*forwarding-symbol* nil))    ; no forward from recursive calls
       (declare (special *ctx* *tfuncs*))
+      (when *maru-debug*
+        (break))
       (cond ((tnull expr) (tnil))
             ((tatom expr)
              (back-talk-arg transformer expr))
@@ -527,7 +531,8 @@
     (if pair (cdr pair) nil)))
 
 (defun maru-boolean-cmp (lhs rhs fn)
-  (when (not (and (typep lhs 'number-object) (typep rhs 'number-object)))
+  (when (not (and (typep lhs 'abstract-long-object)
+                  (typep rhs 'abstract-long-object)))
     (return-from maru-boolean-cmp (mk-bool nil)))
   (mk-bool (funcall fn (object-value lhs) (object-value rhs))))
 
@@ -540,6 +545,10 @@
     (object-value object))
   (:method ((object string-object))
     (scat "\"" (reverse (subseq (reverse (object-value object)) 1))  "\""))
+  (:method ((object abstract-long-object))
+    (if (< (object-value object) (char-code #\z))
+        (code-char (object-value object))
+        (object-value object)))
   (:method ((object function-object))
     "<generic-function-object>")
   (:method ((object runtime-closure-object))
@@ -766,6 +775,8 @@
                      (mk-expr #'maru-primitive-stack-trace))
     (maru-define ctx (maru-intern ctx "break")
                      (mk-expr #'maru-primitive-break))
+    (maru-define ctx (maru-intern ctx "debug")
+                     (mk-expr #'maru-primitive-debug))
 
     ;; compositioners
     (maru-define ctx (maru-intern ctx "*expanders*") (mk-array 32))
@@ -1132,20 +1143,20 @@
 (defun maru-primitive-print (ctx args)
   (declare (ignore ctx))
   (dolist (a (maru-list-to-internal-list-1 args))
-    (funcall #'format t "~A" (maru-printable-object a)))
+    (format t "~A" (maru-printable-object a)))
   (finish-output))
 
 ; expr
 ; FIXME: make nicer output/match imaru
 (defun maru-primitive-dump (ctx args)
   (declare (ignore ctx))
-  (funcall #'format t "~A" (maru-printable-object args)))
+  (format t "~A" (maru-printable-object args)))
 
 ; expr
 ; FIXME: make nicer output/match imaru
 (defun maru-primitive-warn (ctx args)
   (declare (ignore ctx))
-  (funcall #'format *error-output* "~A" (maru-printable-object args)))
+  (format *error-output* "~A" (maru-printable-object args)))
 
 ; expr
 (defun maru-primitive-_list (ctx args)
@@ -1384,6 +1395,12 @@
 (defun maru-primitive-break (ctx args)
   (declare (ignore ctx args))
   (break)
+  (maru-nil))
+
+; expr
+(defun maru-primitive-debug (ctx args)
+  (declare (ignore ctx args))
+  (setf *maru-debug* t)
   (maru-nil))
 
 
@@ -3943,7 +3960,7 @@
         (src "(block
                 (define two (lambda (a b) (+ a b)))
                 ((car '(two three)) 1 2))"))
-    (eq-object (mk-list (mk-symbol "two") (mk-number 1) (mk-number 2))
+    (eq-object (mk-number 3)
                (maru-all-transforms ctx src))))
 
 (deftest test-list-conversion
@@ -4351,5 +4368,11 @@
                       (cons 0 a))))
                 ((fn) '(1 2)))"))
     (eq-object (mk-list (mk-number 0) (mk-number 1) (mk-number 2))
+               (maru-all-transforms ctx src))))
+
+(deftest test-imaru-compare-char-number-bug
+  (let ((ctx (maru-initialize+))
+        (src "(_list (< 5 ?a) (!= 0x41 ?A) (< ?a ?b))"))
+    (eq-object (mk-list (mk-bool t) (mk-bool nil) (mk-bool t))
                (maru-all-transforms ctx src))))
 
