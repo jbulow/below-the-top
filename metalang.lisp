@@ -544,11 +544,12 @@
   (:method ((object single-value-object))
     (object-value object))
   (:method ((object string-object))
-    (scat "\"" (reverse (subseq (reverse (object-value object)) 1))  "\""))
+    (reverse (subseq (reverse (object-value object)) 1)))
   (:method ((object abstract-long-object))
-    (if (< (object-value object) (char-code #\z))
-        (code-char (object-value object))
-        (object-value object)))
+    (let ((val (object-value object)))
+      (if (and (>= val 0) (alpha-char-p (code-char val)))
+          (code-char val)
+          val)))
   (:method ((object function-object))
     "<generic-function-object>")
   (:method ((object runtime-closure-object))
@@ -785,10 +786,6 @@
 
     ctx))
 
-(defun maru-eval (ctx expr)
-  (declare (ignore ctx expr))
-  nil)
-
 (defun binding-exists? (ctx sym)
   (let ((symbol (mk-symbol sym)))
     (and (maru-lookup ctx symbol)
@@ -949,7 +946,6 @@
     (implicit-block-nice-eval (maru-cdr args) :_ctx child-ctx)))
 
 ; fixed
-;; FIXME.
 (defun maru-primitive-while (ctx args)
   (declare (ignore ctx))
   ;; return nil same as boot-eval.c
@@ -1144,19 +1140,22 @@
   (declare (ignore ctx))
   (dolist (a (maru-list-to-internal-list-1 args))
     (format t "~A" (maru-printable-object a)))
-  (finish-output))
+  (finish-output)
+  (maru-nil))
 
 ; expr
 ; FIXME: make nicer output/match imaru
 (defun maru-primitive-dump (ctx args)
   (declare (ignore ctx))
-  (format t "~A" (maru-printable-object args)))
+  (format t "~A" (maru-printable-object args))
+  (maru-nil))
 
 ; expr
 ; FIXME: make nicer output/match imaru
 (defun maru-primitive-warn (ctx args)
   (declare (ignore ctx))
-  (format *error-output* "~A" (maru-printable-object args)))
+  (format *error-output* "~A" (maru-printable-object args))
+  (maru-nil))
 
 ; expr
 (defun maru-primitive-_list (ctx args)
@@ -1295,7 +1294,7 @@
           (copy-vector (array-object-elements (maru-car args))
                        arr)))
     (setf (svref (array-object-elements (maru-car args))
-                  (object-value (maru-cadr args)))
+                 (object-value (maru-cadr args)))
           (maru-caddr args))))
 
 ; expr
@@ -2167,9 +2166,9 @@
                   :test #'string=))
   ;; ???: we ignore the ctx attached to the macro lambda
   `(nil . ,(transform (make-transformer :name transformer-name)
-                    (low-level-maru-apply fn args *ctx*)
-                    *ctx*
-                    :tfuncs *tfuncs*)))
+                      (low-level-maru-apply fn args *ctx*)
+                      *ctx*
+                      :tfuncs *tfuncs*)))
 
 (defmethod pass ((object form-object)
                  (transformer-name (eql 'expand))
