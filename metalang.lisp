@@ -257,6 +257,11 @@
                ctx
                :tfuncs tfuncs)))
 
+(defun implicit-block-nice-eval (exprs &key _ctx _tfuncs)
+  (let ((out (maru-nil)))
+    (dolist (e (maru-list-to-internal-list-1 exprs) out)
+      (setf out (nice-eval e :_ctx _ctx :_tfuncs _tfuncs)))))
+
 (defun maru-typer ()
   (make-transformer :name 'type))
 
@@ -831,10 +836,7 @@
     (if (not (maru-nil? (nice-eval test)))
         (nice-eval then)
         ;; return ``maru-nil'' if there is no else clause
-        (let ((out (maru-nil)))
-          ; implicit block
-          (dolist (e (maru-list-to-internal-list-1 else) out)
-            (setf out (nice-eval e)))))))
+        (implicit-block-nice-eval else))))
 
 ; expr
 (defun maru-primitive-cons (ctx args)
@@ -923,9 +925,7 @@
 
 ; fixed
 (defun maru-primitive-lambda (ctx args)
-  (mk-closure ctx (mk-list (pair-object-car args)
-                           (mk-pair (mk-symbol "block")
-                                    (pair-object-cdr args)))))
+  (mk-closure ctx args))
 
 ; fixed
 (defun maru-primitive-let (ctx args)
@@ -934,12 +934,8 @@
     (dolist (arg-param (maru-list-to-internal-list-1 (maru-car args)))
       (maru-define-new-binding
         child-ctx (maru-car arg-param)
-                  (nice-eval (mk-pair
-                                (mk-symbol "block")
-                                (maru-cdr arg-param)))))
-    (nice-eval
-      (mk-pair (mk-symbol "block") (maru-cdr args))
-      :_ctx child-ctx)))
+                  (implicit-block-nice-eval (maru-cdr arg-param))))
+    (implicit-block-nice-eval (maru-cdr args) :_ctx child-ctx)))
 
 ; fixed
 ;; FIXME.
@@ -947,8 +943,8 @@
   (declare (ignore ctx))
   ;; return nil same as boot-eval.c
   (do ()
-      ((maru-nil? (nice-eval (maru-car args))) nil)
-    (nice-eval (mk-pair (mk-symbol "block") (maru-cdr args)))))
+      ((maru-nil? (nice-eval (maru-car args))) (maru-nil))
+    (implicit-block-nice-eval (maru-cdr args))))
 
 ; expr
 (defun maru-primitive-add (ctx args)
@@ -1387,6 +1383,7 @@
 ; expr
 (defun maru-primitive-break (ctx args)
   (declare (ignore ctx args))
+  (break)
   (maru-nil))
 
 
@@ -1940,7 +1937,8 @@
             (setf values (maru-nil)))
       (assert (and (maru-nil? params) (maru-nil? values)))
       ;; apply the function in the lexical env
-      `(nil . ,(nice-eval (maru-cadr src) :_ctx child-ctx)))))
+      `(nil . ,(implicit-block-nice-eval (maru-cdr src)
+                                         :_ctx child-ctx)))))
 
 ;;;;;;;;;; number object ;;;;;;;;;;
 
@@ -2798,6 +2796,18 @@
   (maru-printable-object
     (maru-all-transforms *ctx* (scat "(block " src " )"))))
 
+(defparameter *boot* "/home/burrows/code/maru-bstrap/boot.l")
+(defparameter *emit* "/home/burrows/code/maru-bstrap/emit.l")
+(defparameter *eval* "/home/burrows/code/maru-bstrap/eval.l")
+
+(defun all ()
+  (process-file *eval* (process-file *emit* (process-file *boot*)))
+  nil)
+
+(defun part ()
+  (process-file *emit* (process-file *boot*))
+  nil)
+
 (deftest test-maru-eval-with-fixed
   (let* ((ctx (maru-initialize))
          (eval-transformer (make-transformer :name 'eval))
@@ -3326,6 +3336,15 @@
                                           (mk-pair (mk-number 10)
                                                    (mk-number 10)))))
                (maru-all-transforms ctx src0))))
+
+(deftest test-maru-while-primitive-return-bug
+ (let* ((ctx (maru-initialize))
+        (src "(block
+                (define i 0)
+                (while (< i 3)
+                  (set i (+ 1 i))))"))
+    (eq-object (maru-nil)
+               (maru-all-transforms ctx src))))
 
 (deftest test-maru-pair?-primitive
   (let* ((ctx (maru-initialize))
