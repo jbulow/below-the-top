@@ -908,7 +908,7 @@
 
 ; expr
 (defprimitive set-car ((pair pair-object) value)
-  (setf (pair-object-car pair) value))
+  (setf (maru-car pair) value))
 
 ; expr
 ; IDL: imaru says the cdr of a non list object is nil
@@ -919,7 +919,7 @@
 
 ; expr
 (defprimitive set-cdr ((pair pair-object) value)
-  (setf (pair-object-cdr pair) value))
+  (setf (maru-cdr pair) value))
 
 ; expr
 (defprimitive caar ((list list-object))
@@ -1424,11 +1424,17 @@
   (:method ((pair nil-object))
     (maru-nil)))
 
+(defun (setf maru-car) (value pair)
+  (setf (pair-object-car pair) value))
+
 (defgeneric maru-cdr (pair-object)
   (:method ((pair pair-object))
     (pair-object-cdr pair))
   (:method ((pair nil-object))
     (maru-nil)))
+
+(defun (setf maru-cdr) (value pair)
+  (setf (pair-object-cdr pair) value))
 
 (defmethod maru-cadr (maru-list)
   (maru-car (maru-cdr maru-list)))
@@ -1615,8 +1621,8 @@
          (equal (subseq (object-value lhs) 0 (string-object-length lhs))
                 (subseq (object-value rhs) 0 (string-object-length rhs)))))
   (:method ((lhs pair-object) (rhs pair-object))
-    (and (eq-object (pair-object-car lhs) (pair-object-car rhs))
-         (eq-object (pair-object-cdr lhs) (pair-object-cdr rhs))))
+    (and (eq-object (maru-car lhs) (maru-car rhs))
+         (eq-object (maru-cdr lhs) (maru-cdr rhs))))
   ;; we don't want to do the pair comparison if the second argument
   ;; is a nil
   (:method ((lhs pair-object) (rhs nil-object))
