@@ -287,7 +287,7 @@
 (defmethod inform ((object basic-object)
                    (transformer-name (eql 'noop))
                    (whatami (eql 'arg)))
-  (cons nil object))
+  object)
 
 (defmethod inform ((object basic-object)
                    (transformer-name (eql 'noop))
@@ -297,7 +297,7 @@
 (defmethod pass ((object basic-object)
                  (transformer-name (eql 'noop))
                  (args list))
-  (cons nil (append (list object) args)))
+  (append (list object) args))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -379,11 +379,7 @@
 (defun back-talk-arg (transformer expr)
   (declare (special *ctx*))
   (assert (tatom expr))
-  ;; response : (transform-more? . sexpr)
-  (let ((response (inform expr (transformer-name transformer) 'arg)))
-    (if (car response)
-        (transform transformer (cdr response) *ctx*)
-        (cdr response))))
+  (inform expr (transformer-name transformer) 'arg))
 
 (defparameter *stack-trace* (maru-nil))
 (defparameter *stack-depth* 10)
@@ -400,23 +396,18 @@
   (assert (tproper? expr-args))
   (let* ((*stack-trace* (mk-pair (mk-pair lead expr-args)
                                  *stack-trace*))
-         ;; response : can-i-talk-to-your-arguments?
-         (response (inform lead (transformer-name transformer) 'lead))
+         (transform-args?
+           (inform lead (transformer-name transformer) 'lead))
          (args (tmapcar
                  #'(lambda (a)
-                     (if response
+                     (if transform-args?
                          (transform transformer
                                     a
                                     *ctx*
                                     :tfuncs *tfuncs*)
                          (identity a)))
                      expr-args)))
-      ;; response : (transform-more? . sexpr)
-      (let ((response-2
-              (pass lead (transformer-name transformer) args)))
-        (if (car response-2)
-            (transform transformer (cdr response-2) *ctx*)
-            (cdr response-2)))))
+    (pass lead (transformer-name transformer) args)))
 
 (defparameter *maru-debug* nil)
 
@@ -1113,7 +1104,7 @@
     ;; we cannot do full eval transformation here because it has already
     ;; occurred; thus our arguments are already evaluated
     ;; > we use ``pass'' because the around hook will handle applicators
-    (cdr (pass fn 'eval fn-args))))
+    (pass fn 'eval fn-args)))
 
 ; expr
 ; args <- expression, [environment]
@@ -1635,7 +1626,7 @@
                                  &optional ctx)
   (let ((bound-fn (function-object-fn fn)))
     (typecase bound-fn
-      (runtime-closure-object (cdr (pass bound-fn 'eval args)))
+      (runtime-closure-object (pass bound-fn 'eval args))
       (function (funcall bound-fn ctx args))
       (otherwise "unknown function type"))))
 
@@ -1736,7 +1727,7 @@
                    (transformer-name (eql 'type))
                    (whatami (eql 'arg)))
   (declare (special *ctx*))
-  `(nil . ,(type-it *ctx* object)))
+  (type-it *ctx* object))
 
 (defmethod inform ((object untyped-object)
                    (transformer-name (eql 'type))
@@ -1756,7 +1747,7 @@
                  (args list))
   (declare (special *ctx*))
   (let ((typed-lead (type-it *ctx* object)))
-    `(nil . ,(mk-pair typed-lead (internal-list-to-maru-list args)))))
+    (mk-pair typed-lead (internal-list-to-maru-list args))))
 
 ;;;;;;;;;; list as lead ;;;;;;;;;;
 
@@ -1774,7 +1765,7 @@
                  (transformer-name (eql 'type))
                  (args list))
   (declare (special *ctx*))
-  `(nil . ,(cons (transform (maru-typer) list *ctx*) args)))
+  (cons (transform (maru-typer) list *ctx*) args))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; _very_ generic maru transformers
@@ -1795,8 +1786,7 @@
                  (args list-object))
   (declare (special *ctx* *tfuncs*))
   (let ((tformer (make-transformer :name transformer-name)))
-    `(nil . ,(mk-pair (transform tformer list *ctx* :tfuncs *tfuncs*)
-                      args))))
+    (mk-pair (transform tformer list *ctx* :tfuncs *tfuncs*) args)))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -1827,7 +1817,7 @@
 (defmethod inform ((object basic-object)
                    (transformer-name (eql 'eval))
                    (whatami (eql 'arg)))
-  `(nil . ,object))
+  object)
 
 (defmethod inform ((object basic-object)
                    (transformer-name (eql 'eval))
@@ -1867,7 +1857,7 @@
   (declare (special *ctx*))
   (let ((binding (maru-lookup *ctx* object)))
     (if binding
-        `(nil . ,binding)
+        binding
         (error "can not eval symbol ``~A''; no binding!"
                (object-value object)))))
 
@@ -1896,7 +1886,7 @@
 (defmethod inform ((object expr-object)
                    (transformer-name (eql 'eval))
                    (whatami (eql 'arg)))
-  `(nil . ,object))
+  object)
 
 (defmethod inform ((object expr-object)
                    (transformer-name (eql 'eval))
@@ -1907,7 +1897,7 @@
                  (transformer-name (eql 'eval))
                  (args list-object))
   (declare (special *ctx*))
-  `(nil . ,(low-level-maru-apply object args *ctx*)))
+  (low-level-maru-apply object args *ctx*))
 
 
 ;;;;;;;;;; fixed object ;;;;;;;;;;
@@ -1915,7 +1905,7 @@
 (defmethod inform ((object fixed-object)
                    (transformer-name (eql 'eval))
                    (whatami (eql 'arg)))
-  `(nil . ,object))
+  object)
 
 (defmethod inform ((object fixed-object)
                    (transformer-name (eql 'eval))
@@ -1926,14 +1916,14 @@
                  (transformer-name (eql 'eval))
                  (args list-object))
   (declare (special *ctx*))
-  `(nil . ,(low-level-maru-apply object args *ctx*)))
+  (low-level-maru-apply object args *ctx*))
 
 ;;;;;;;;;; runtime closure object ;;;;;;;;;;
 
 (defmethod inform ((object runtime-closure-object)
                    (transformer-name (eql 'eval))
                    (whatami (eql 'arg)))
-  `(nil . ,object))
+  object)
 
 (defmethod inform ((object runtime-closure-object)
                    (transformer-name (eql 'eval))
@@ -1972,15 +1962,14 @@
             (setf values (maru-nil)))
       (assert (and (maru-nil? params) (maru-nil? values)))
       ;; apply the function in the lexical env
-      `(nil . ,(implicit-block-nice-eval (maru-cdr src)
-                                         :_ctx child-ctx)))))
+      (implicit-block-nice-eval (maru-cdr src) :_ctx child-ctx))))
 
 ;;;;;;;;;; number object ;;;;;;;;;;
 
 (defmethod inform ((object number-object)
                    (transformer-name (eql 'eval))
                    (whatami (eql 'arg)))
-  `(nil . ,object))
+  object)
 
 ;; FIXME: support lead numbers
 (defmethod inform ((object number-object)
@@ -1999,26 +1988,23 @@
                    (transformer-name (eql 'eval))
                    (whatami (eql 'arg)))
   (error "no expand args at eval time"))
-  ; `(nil . ,object))
 
 (defmethod inform ((object form-object)
                    (transformer-name (eql 'eval))
                    (whatami (eql 'lead)))
   (error "no expand leads at eval time"))
-  ; nil)
 
 (defmethod pass ((object form-object)
                  (transformer-name (eql 'eval))
                  (args list-object))
   (error "no expand passing at eval time"))
-  ; `(nil . ,(mk-pair object args)))
 
 ;;;;;;;;;; raw object ;;;;;;;;;;
 
 (defmethod inform ((object raw-object)
                    (transformer-name (eql 'eval))
                    (whatami (eql 'arg)))
-  `(nil . ,object))
+  object)
 
 (defmethod inform ((object raw-object)
                    (transformer-name (eql 'eval))
@@ -2030,7 +2016,7 @@
 (defmethod pass ((object raw-object)
                  (transformer-name (eql 'eval))
                  (args list-object))
-  `(nil . ,(mk-pair object args)))
+  (mk-pair object args))
 
 
 ;;;;;;;;;; pair object ;;;;;;;;;;
@@ -2061,8 +2047,8 @@
                    (transformer-name (eql 'expand))
                    (whatami (eql 'arg)))
   (if *forwarding-symbol*
-      `(nil . ,*forwarding-symbol*)
-      `(nil . ,object)))
+      *forwarding-symbol*
+      object))
 
 (defmethod inform ((object basic-object)
                    (transformer-name (eql 'expand))
@@ -2073,8 +2059,8 @@
                  (trasformer-name (eql 'expand))
                  (args list-object))
   (if *forwarding-symbol*
-      `(nil . ,(tcons *forwarding-symbol* args))
-      `(nil . ,(tcons object args))))
+      (tcons *forwarding-symbol* args)
+      (tcons object args)))
 
 
 ;;;;;;;;;; symbol object ;;;;;;;;;;
@@ -2089,7 +2075,7 @@
     (if binding
         (let ((*forwarding-symbol* object))
           (inform binding 'expand 'arg))
-        `(nil . ,object))))
+        object)))
 
 (defmethod inform ((object symbol-object)
                    (transformer-name (eql 'expand))
@@ -2114,7 +2100,7 @@
     (if binding
         (let ((*forwarding-symbol* object))
           (pass binding transformer-name args))
-        `(nil . ,(tcons object args)))))
+        (tcons object args))))
 
 
 ;;;;;;;;;; form object ;;;;;;;;;;
@@ -2135,10 +2121,10 @@
   (declare (special *ctx* *tfuncs*))
   (assert (string= 'expand transformer-name))
   ;; ???: we ignore the ctx attached to the macro lambda
-  `(nil . ,(transform (make-transformer :name transformer-name)
-                      (low-level-maru-apply fn args *ctx*)
-                      *ctx*
-                      :tfuncs *tfuncs*)))
+  (transform (make-transformer :name transformer-name)
+             (low-level-maru-apply fn args *ctx*)
+             *ctx*
+             :tfuncs *tfuncs*))
 
 (defmethod pass ((object form-object)
                  (transformer-name (eql 'expand))
@@ -2170,8 +2156,8 @@
                    (transformer-name (eql 'expand))
                    (whatami (eql 'arg)))
   (if *forwarding-symbol*
-      `(nil . ,*forwarding-symbol*)
-      `(nil . ,pair)))
+      *forwarding-symbol*
+      pair))
 
 ;;;;;;;;;; fixed lead ;;;;;;;;;;
 
