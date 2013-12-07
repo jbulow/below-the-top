@@ -33,18 +33,8 @@
 ;;;;   > the transformers use common lisp lists (and not maru lisps) to
 ;;;;     represent maru code. this means that 'quote' must do some type
 ;;;;     of runtime conversion into a maru list.
-;;;; . pseudoforms are currently a hack
-;;;;   > ``set'' should happen after expansion and before evaluation; so
-;;;;     it occurs in the 'pseudoexpand transformation
-;;;;   > the semantics are exactly the same as the 'expand transformation
-;;;;     except we want to deal with a seperate set of identifiers; the
-;;;;     ``pseudoexpanders''
-;;;;   > we can't make ``set'' a macro that we treat conditionally because
-;;;;     expansion doesn't end until all macros are expanded; so we never
-;;;;     make it out of vanilla expansion
-;;;;   > we also want to avoid duplicating expand semantics into pexpand
-;;;;     handlers; currently we use the *pseudoexpansion* identifier and
-;;;;     the form-helper function, not totally clean
+;;;; . pseudoforms are are macros whose arguments we expand before
+;;;    passing
 ;;;; . metacircularities (shortcircuited by operators/forms in emit.l)
 ;;;;   > oop-at/set-oop-at
 
@@ -1059,8 +1049,7 @@
 
 ; pseudoform
 (defun maru-primitive-set (ctx args)
-  (declare (ignore ctx) (special *pseudoexpansion*))
-  (assert *pseudoexpansion*)
+  (declare (ignore ctx))
   (assert (= 2 (maru-length args)))
   (cond ((maru-list? (maru-car args))
          (mk-pair (mk-symbol (scat "set-"
@@ -2054,43 +2043,6 @@
     (pass (transform tformer list *ctx* :tfuncs *tfuncs*) 'eval args)))
 
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; maru pseudoexpansion transformer
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-(defparameter *pseudoexpansion* nil)
-
-(defmethod inform ((object basic-object)
-                   (transformer-name (eql 'pseudoexpand))
-                   (whatami (eql 'arg)))
-  (let ((*pseudoexpansion* t))
-    (declare (special *pseudoexpansion*))
-    (inform object 'expand whatami)))
-
-(defmethod inform ((object basic-object)
-                   (transformer-name (eql 'pseudoexpand))
-                   (whatami (eql 'lead)))
-  (let ((*pseudoexpansion* t))
-    (declare (special *pseudoexpansion*))
-    (inform object 'expand whatami)))
-
-(defmethod pass ((object basic-object)
-                 (trasformer-name (eql 'pseudoexpand))
-                 (args list-object))
-  (let ((*pseudoexpansion* t))
-    (declare (special *pseudoexpansion*))
-    (pass object 'expand args)))
-
-;;;;;;;;;;; pseudoform ;;;;;;;;;;;;;;
-
-(defmethod pass ((object pseudoform-object)
-                 (transformer-name (eql 'pseudoexpand))
-                 (args list-object))
-  (let ((*pseudoexpansion* t))
-    (declare (special *pseudoexpansion*))
-    (form-helper object transformer-name args)))
-
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;  maru expansion transformer
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -2158,13 +2110,10 @@
   (declare (special *ctx*))
   (when *forwarding-symbol*
     (return-from pass `(nil . ,(tcons *forwarding-symbol* args))))
-  (let ((binding (maru-lookup *ctx* object))
-        ;; HACK
-        (real-transformer-name
-          (if *pseudoexpansion* 'pseudoexpand transformer-name)))
+  (let ((binding (maru-lookup *ctx* object)))
     (if binding
         (let ((*forwarding-symbol* object))
-          (pass binding real-transformer-name args))
+          (pass binding transformer-name args))
         `(nil . ,(tcons object args)))))
 
 
@@ -2184,9 +2133,7 @@
 
 (defun form-helper (fn transformer-name args)
   (declare (special *ctx* *tfuncs*))
-  ;; only use this with macros/pmacros
-  (assert (member transformer-name '(expand pseudoexpand)
-                  :test #'string=))
+  (assert (string= 'expand transformer-name))
   ;; ???: we ignore the ctx attached to the macro lambda
   `(nil . ,(transform (make-transformer :name transformer-name)
                       (low-level-maru-apply fn args *ctx*)
@@ -2197,6 +2144,25 @@
                  (transformer-name (eql 'expand))
                  (args list-object))
   (form-helper object transformer-name args))
+
+;;;;;;;;;; pseudoform object ;;;;;;;;;;
+
+(defmethod inform ((object pseudoform-object)
+                   (transformer-name (eql 'expand))
+                   (whatami (eql 'arg)))
+  (error "pseudoform-objectz should not be arguments! ~A"
+         (maru-printable-object *forwarding-symbol*)))
+
+(defmethod inform ((object pseudoform-object)
+                   (transformer-name (eql 'expand))
+                   (whatami (eql 'lead)))
+  t)
+
+(defmethod pass ((object pseudoform-object)
+                 (transformer-name (eql 'expand))
+                 (args list-object))
+  (form-helper object transformer-name args))
+
 
 ;;;;;;;;;; list as lead ;;;;;;;;;;
 
@@ -2241,10 +2207,8 @@
 
 (defun maru-expand->eval (ctx expr)
   (let ((expand-transformer (make-transformer :name 'expand))
-        (pseudoexpand-transformer (make-transformer :name 'pseudoexpand))
         (eval-transformer (make-transformer :name 'eval))
         (expanded-expr nil)
-        (pexpanded-expr nil)
         (evald-expr nil))
     (setf expanded-expr
           (transform expand-transformer
@@ -2253,17 +2217,9 @@
                      :tfuncs (maru-tfuncs)))
     ; (when (atom expanded-expr)
         ; (format t "EXPAND: ~A~%" (maru-printable-object expanded-expr)))
-    (setf pexpanded-expr
-          (transform pseudoexpand-transformer
-                     expanded-expr
-                     ctx
-                     :tfuncs (maru-tfuncs)))
-    ; (when (atom expanded-expr)
-        ; (format t "PEXPAND: ~A~%"
-                  ; (maru-printable-object pexpanded-expr)))
     (setf evald-expr
           (transform eval-transformer
-                     pexpanded-expr
+                     expanded-expr
                      ctx
                      :tfuncs (maru-tfuncs)))
     ; (when (atom evald-expr)
