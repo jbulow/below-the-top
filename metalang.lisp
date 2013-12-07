@@ -812,11 +812,76 @@
 (define-condition missing-feature (error)
   ())
 
+(defun get-arg-range (args)
+  (let ((output (cons 0 0)))
+    (dolist (a args output)
+      (cond ((atom a)
+             (assert (not (null a)))
+             (incf (car output))
+             (incf (cdr output)))
+            (t (let ((status (caddr a)))
+                 (case status
+                   (:optional (incf (cdr output)))
+                   (otherwise
+                     (assert (or (string= status :required)
+                                 (null status)))
+                     (incf (car output))
+                     (incf (cdr output)))))))
+    output)))
+
+(defun maru-nth (index pair)
+  (cond ((zerop index) (maru-car pair))
+        (t (maru-nth (1- index) (maru-cdr pair)))))
+
+(defun build-type-assertions (args &optional (index 0))
+  (when (null args)
+    (return-from build-type-assertions '()))
+  (when (null (car args))
+    (error "bad primitive argument"))
+  (let ((option
+          (cond ((consp (car args))
+                 `(and ,(string= 'optional (caddar args))
+                       (>= ,index arg-count)))
+                (t '())))
+        (type
+          (cond ((atom (car args)) t)
+                ((null (cadar args)) t)   ;; any type
+                ((consp (cadar args))
+                 `(member (type-of (maru-nth ,index args))
+                         ',(cadar args)))
+                (t `(typep (maru-nth ,index args) ',(cadar args))))))
+    (cons `(or ,option ,type)
+          (build-type-assertions (cdr args) (1+ index)))))
+
+
+(defun build-let-bindings (args &optional (index 0))
+  (cond ((null args) '())
+        ((null (car args)) (error "bad primitive argument"))
+        ((atom (car args)) (cons `(,(car args) (maru-nth ,index args))
+                                 (build-let-bindings (cdr args)
+                                                     (1+ index))))
+        (t (cons `(,(caar args) (maru-nth ,index args))
+                 (build-let-bindings (cdr args) (1+ index))))))
+
+(defmacro defprimitive (name arguments &rest body)
+  (let ((arg-range (get-arg-range arguments))
+        (full-name (intern (scat "MARU-PRIMITIVE-" (to-string name)))))
+    `(defun ,full-name (ctx args)
+       (let ((arg-count (maru-length args)))
+         (assert (and (>= arg-count ,(car arg-range))
+                      (<= arg-count ,(cdr arg-range))))
+         (assert (and ,@(build-type-assertions arguments)))
+         (identity ctx)   ;; get rid of unused warning
+         (let (,@(build-let-bindings arguments))
+           ,@body)))))
+
+; (defprimitive prim ((a number-object :required)
+                    ; (b pair-object))
+  ; (format t "whatever"))
+
 ; form
-(defun maru-primitive-quote (ctx args)
-  (declare (ignore ctx))
-  (assert (= 1 (maru-length args)))
-  (maru-car args))
+(defprimitive quote (value)
+  value)
 
 ; fixed
 (defun maru-primitive-if (ctx args)
@@ -831,49 +896,34 @@
         (implicit-block-nice-eval else))))
 
 ; expr
-(defun maru-primitive-cons (ctx args)
-  (declare (ignore ctx))
-  (assert (= 2 (maru-length args)))
-  (mk-pair (maru-car args)
-           (maru-cadr args)))
+(defprimitive cons (head tail)
+  (mk-pair head tail))
 
 ; expr
 ; IDL: imaru says the car of a non list object is nil
-(defun maru-primitive-car (ctx args)
-  (declare (ignore ctx))
-  (assert (and (= 1 (maru-length args))))
-  (when (not (typep (maru-car args) 'list-object))
+(defprimitive car (value)
+  (when (not (typep value 'list-object))
     (return-from maru-primitive-car (maru-nil)))
-  (maru-car (maru-car args)))
+  (maru-car value))
 
 ; expr
-(defun maru-primitive-set-car (ctx args)
-  (declare (ignore ctx))
-  (assert (and (= 2 (maru-length args))
-               (typep (maru-car args) 'list-object)))
-  (setf (pair-object-car (maru-car args)) (maru-cadr args)))
+(defprimitive set-car ((pair pair-object) value)
+  (setf (pair-object-car pair) value))
 
 ; expr
 ; IDL: imaru says the cdr of a non list object is nil
-(defun maru-primitive-cdr (ctx args)
-  (declare (ignore ctx))
-  (assert (and (= 1 (maru-length args))))
-  (when (not (typep (maru-car args) 'list-object))
+(defprimitive cdr (value)
+  (when (not (typep value 'list-object))
     (return-from maru-primitive-cdr (maru-nil)))
-  (maru-cdr (maru-car args)))
+  (maru-cdr value))
 
 ; expr
-(defun maru-primitive-set-cdr (ctx args)
-  (declare (ignore ctx))
-  (assert (and (= 2 (maru-length args))
-               (typep (maru-car args) 'list-object)))
-  (setf (pair-object-cdr (maru-car args)) (maru-cadr args)))
+(defprimitive set-cdr ((pair pair-object) value)
+  (setf (pair-object-cdr pair) value))
 
 ; expr
-(defun maru-primitive-caar (ctx args)
-  (declare (ignore ctx))
-  (assert (= 1 (maru-length args)))
-  (maru-car (maru-car (maru-car args))))
+(defprimitive caar ((list list-object))
+  (maru-car (maru-car list)))
 
 ; fixed
 (defun maru-primitive-and (ctx args)
@@ -894,18 +944,13 @@
         (return out)))))
 
 ; expr
-(defun maru-primitive-not (ctx args)
-  (declare (ignore ctx))
-  (assert (= 1 (maru-length args)))
-  (mk-bool (maru-nil? (maru-car args))))
+(defprimitive not (value)
+  (mk-bool (maru-nil? value)))
 
 ; form
 ; FIXME: Should we be expanding here?
-(defun maru-primitive-define (ctx args)
-  (cdr
-    (maru-define ctx (pair-object-car args)
-                     (nice-eval (pair-object-car
-                                (pair-object-cdr args))))))
+(defprimitive define ((symbol symbol-object) value)
+  (cdr (maru-define ctx symbol (nice-eval value))))
 
 ; expr
 (defun maru-primitive-block (ctx args)
@@ -938,105 +983,90 @@
     (implicit-block-nice-eval (maru-cdr args))))
 
 ; expr
-(defun maru-primitive-add (ctx args)
-  (declare (ignore ctx))
-  (mk-number (+ (object-value (maru-car args))
-                (object-value (maru-cadr args)))))
+(defprimitive add ((a abstract-long-object) (b abstract-long-object))
+  (mk-number (+ (object-value a) (object-value b))))
 
 ; expr
-(defun maru-primitive-sub (ctx args)
-  (declare (ignore ctx))
-  (assert (member (maru-length args) '(1 2)))
+(defprimitive sub ((a abstract-long-object)
+                   (b abstract-long-object :optional))
   (if (= 1 (maru-length args))
-      (mk-number (- (object-value (maru-car args))))
-      (mk-number (- (object-value (maru-car args))
-                    (object-value (maru-cadr args))))))
+      (mk-number (- (object-value a)))
+      (mk-number (- (object-value a) (object-value b)))))
 
 ; expr
-(defun maru-primitive-mul (ctx args)
-  (declare (ignore ctx))
-  (mk-number (* (object-value (maru-car args))
-                (object-value (maru-cadr args)))))
+(defprimitive mul ((a abstract-long-object)
+                   (b abstract-long-object))
+  (mk-number (* (object-value a) (object-value b))))
 
 ; expr
-(defun maru-primitive-div (ctx args)
-  (declare (ignore ctx))
-  (mk-number (floor (object-value (maru-car args))
-                    (object-value (maru-cadr args)))))
+(defprimitive div ((a abstract-long-object)
+                   (b abstract-long-object))
+  (mk-number (floor (object-value a) (object-value b))))
 
 ; expr
-(defun maru-primitive-mod (ctx args)
-  (declare (ignore ctx))
+(defprimitive mod ((a abstract-long-object)
+                   (b abstract-long-object))
   (multiple-value-bind (whole-quotient remainder)
-        (floor (object-value (maru-car args))
-               (object-value (maru-cadr args)))
+        (floor (object-value a) (object-value b))
     (declare (ignore whole-quotient))
     (mk-number remainder)))
 
 ; expr
-(defun maru-primitive-bit-and (ctx args)
-  (declare (ignore ctx))
-  (mk-number (logand (object-value (maru-car args))
-                     (object-value (maru-cadr args)))))
+(defprimitive bit-and ((a abstract-long-object)
+                       (b abstract-long-object))
+  (mk-number (logand (object-value a) (object-value b))))
 
 ; expr
-(defun maru-primitive-bit-or (ctx args)
-  (declare (ignore ctx))
-  (mk-number (logior (object-value (maru-car args))
-                     (object-value (maru-cadr args)))))
+(defprimitive bit-or ((a abstract-long-object)
+                      (b abstract-long-object))
+  (mk-number (logior (object-value a) (object-value b))))
 
 ; expr
-(defun maru-primitive-bit-xor (ctx args)
-  (declare (ignore ctx))
-  (mk-number (logxor (object-value (maru-car args))
-                     (object-value (maru-cadr args)))))
+(defprimitive bit-xor ((a abstract-long-object)
+                       (b abstract-long-object))
+  (mk-number (logxor (object-value a) (object-value b))))
 
 ; expr
-(defun maru-primitive-complement (ctx args)
-  (declare (ignore ctx))
-  (mk-number (lognot (object-value (maru-car args)))))
+(defprimitive complement (value)
+  (mk-number (lognot (object-value value))))
 
 ; expr
-(defun maru-primitive-shift-left (ctx args)
-  (declare (ignore ctx))
-  (mk-number (ash (object-value (maru-car args))
-                  (object-value (maru-cadr args)))))
+(defprimitive shift-left ((a abstract-long-object)
+                          (b abstract-long-object))
+  (mk-number (ash (object-value a) (object-value b))))
 
 ; expr
-(defun maru-primitive-shift-right (ctx args)
-  (declare (ignore ctx))
-  (mk-number (ash (object-value (maru-car args))
-                  (- (object-value (maru-cadr args))))))
+(defprimitive shift-right ((a abstract-long-object)
+                           (b abstract-long-object))
+  (mk-number (ash (object-value a) (- (object-value b)))))
 
 ; expr
-(defun maru-primitive-eq (ctx args)
-  (declare (ignore ctx))
-  (mk-bool (eq-object (maru-car args) (maru-cadr args))))
+(defprimitive eq (a b)
+  (mk-bool (eq-object a b)))
 
 ; expr
-(defun maru-primitive-neq (ctx args)
-  (declare (ignore ctx))
-  (maru-boolean-cmp (maru-car args) (maru-cadr args) #'/=))
+(defprimitive neq (a b)
+  (maru-boolean-cmp a b #'/=))
 
 ; expr
-(defun maru-primitive-lt (ctx args)
-  (declare (ignore ctx))
-  (maru-boolean-cmp (maru-car args) (maru-cadr args) #'<))
+(defprimitive lt ((a abstract-long-object)
+                  (b abstract-long-object))
+  (maru-boolean-cmp a b #'<))
 
 ; expr
-(defun maru-primitive-lte (ctx args)
-  (declare (ignore ctx))
-  (maru-boolean-cmp (maru-car args) (maru-cadr args) #'<=))
+(defprimitive lte ((a abstract-long-object)
+                   (b abstract-long-object))
+  (maru-boolean-cmp a b #'<=))
 
 ; expr
-(defun maru-primitive-gt (ctx args)
-  (declare (ignore ctx))
-  (maru-boolean-cmp (maru-car args) (maru-cadr args) #'>))
+(defprimitive gt ((a abstract-long-object)
+                  (b abstract-long-object))
+  (maru-boolean-cmp a b #'>))
 
 ; expr
-(defun maru-primitive-gte (ctx args)
-  (declare (ignore ctx))
-  (maru-boolean-cmp (maru-car args) (maru-cadr args) #'>=))
+(defprimitive gte ((a abstract-long-object)
+                   (b abstract-long-object))
+  (maru-boolean-cmp a b #'>=))
 
 ; pseudoform
 (defun maru-primitive-set (ctx args)
@@ -1050,32 +1080,27 @@
 
 ; fixed
 ; FIXME: make sure the symbol is actually internd
-(defun maru-primitive-seth (ctx args)
-  (assert (= 2 (maru-length args)))
-  (let ((binding (maru-lookup-raw ctx (maru-car args))))
+(defprimitive seth ((symbol 'symbol-object) value)
+  (let ((binding (maru-lookup-raw ctx symbol)))
     (when (null binding)
-      (error "``~a'' is undefined thus can not be set" (maru-car args)))
-    (setf (cdr binding) (nice-eval (maru-cadr args)))))
+      (error "``~a'' is undefined thus can not be set" symbol))
+    (setf (cdr binding) (nice-eval value))))
 
 ; expr
-(defun maru-primitive-pair? (ctx args)
-  (declare (ignore ctx))
-  (mk-bool (maru-pair? (maru-car args))))
+(defprimitive pair? (value)
+  (mk-bool (maru-pair? value)))
 
 ; expr
-(defun maru-primitive-symbol? (ctx args)
-  (declare (ignore ctx))
-  (mk-bool (maru-symbol? (maru-car args))))
+(defprimitive symbol? (value)
+  (mk-bool (maru-symbol? value)))
 
 ; expr
-(defun maru-primitive-type-of (ctx args)
-  (declare (ignore ctx))
-  (assert (= 1 (maru-length args)))
-  (cond ((typep (maru-car args) 'raw-object)
-         (mk-number (raw-object-type (maru-car args))))
+(defprimitive type-of (value)
+  (cond ((typep value 'raw-object)
+         (mk-number (raw-object-type value)))
         (t ;; hardcoded into imaru
           (mk-number
-            (typecase (maru-car args)
+            (typecase value
               (nil-object               0)
               (number-object            1)
               (char-object              1)
@@ -1092,33 +1117,25 @@
 
 ; expr
 ; args <- function, [args], [environment]
-(defun maru-primitive-apply (ctx args)
-  (declare (ignore ctx))
-  (assert (and (<= (maru-length args) 3)))
-               ; (typep (maru-car args) 'function-object)))
-  (let ((fn (maru-car args))
-        (fn-args (maru-cadr args))
-        (fn-env (maru-caddr args)))
-    ;; FIXME: use env if provided
-    (or fn-env (assert nil))
-    ;; we cannot do full eval transformation here because it has already
-    ;; occurred; thus our arguments are already evaluated
-    ;; > we use ``pass'' because the around hook will handle applicators
-    (pass fn 'eval fn-args)))
+(defprimitive apply (fn
+                     (fn-args list-object :optional)
+                     (fn-env  list-object :optional))
+  ;; FIXME: use env if provided
+  (or fn-env (assert nil))
+  ;; we cannot do full eval transformation here because it has already
+  ;; occurred; thus our arguments are already evaluated
+  ;; > we use ``pass'' because the around hook will handle applicators
+  (pass fn 'eval fn-args))
 
 ; expr
 ; args <- expression, [environment]
-(defun maru-primitive-eval (ctx args)
-  (assert (and (<= (maru-length args) 2)))
-  (let ((expr (maru-car args))
-        (env (maru-caddr args)))
-    ;; FIXME: use env if provided
-    (or env (assert nil))
-    ;; expansion ---> evaluation
-    (maru-expand->eval ctx expr)))
+(defprimitive eval (expr (env list-object :optional))
+  ;; FIXME: use env if provided
+  (or env (assert nil))
+  ;; expansion ---> evaluation
+  (maru-expand->eval ctx expr))
 
 ; expr
-; FIXME: make nicer output/match imaru
 (defun maru-primitive-print (ctx args)
   (declare (ignore ctx))
   (dolist (a (maru-list-to-internal-list-1 args))
@@ -1166,201 +1183,158 @@
   args)
 
 ; expr
-(defun maru-primitive-string (ctx args)
-  (declare (ignore ctx))
-  (assert (and (= 1 (maru-length args))
-               (typep (maru-car args) 'number-object)))
-  (mk-string :size (object-value (maru-car args))))
+(defprimitive string ((value number-object))
+  (mk-string :size (object-value value)))
 
 ; expr
-(defun maru-primitive-string? (ctx args)
-  (declare (ignore ctx))
-  (assert (= 1 (maru-length args)))
-  (mk-bool (typep (maru-car args) 'string-object)))
+(defprimitive string? (value)
+  (mk-bool (typep value 'string-object)))
 
 ; expr
-(defun maru-primitive-string-length (ctx args)
-  (declare (ignore ctx))
-  (assert (and (= 1 (maru-length args))
-               (typep (maru-car args) 'string-object)))
-  (mk-number (string-object-size (maru-car args))))
+(defprimitive string-length ((string string-object))
+  (mk-number (string-object-size string)))
 
 ; expr
-(defun maru-primitive-string-at (ctx args)
-  (declare (ignore ctx))
-  (assert (and (= 2 (maru-length args))
-               (typep (maru-car args) 'string-object)
-               (typep (maru-cadr args) 'number-object)))
-  (let ((index (object-value (maru-cadr args))))
-    (if (and (>= index 0) (< index (string-object-size (maru-car args))))
-      (mk-char (elt (object-value (maru-car args)) index))
-      (maru-nil))))
+(defprimitive string-at ((string string-object)
+                         (index abstract-long-object))
+  (let ((i (object-value index)))
+    (if (and (>= i 0) (< i (string-object-size string)))
+        (mk-char (elt (object-value string) i))
+        (maru-nil))))
 
 ; expr
-(defun maru-primitive-set-string-at (ctx args)
-  (declare (ignore ctx))
-  (assert (and (= 3 (maru-length args))
-               (typep (maru-car args) 'string-object)
-               (typep (maru-cadr args) 'number-object)
-               (typep (maru-caddr args) 'abstract-long-object)))
-  (let ((index (object-value (maru-cadr args)))
-        (char (object-value (maru-caddr args))))
-    (if (and (>= index 0) (< index (string-object-size (maru-car args))))
-      (progn
-        (setf (elt (object-value (maru-car args)) index) (code-char char))
-        (maru-car args))
-      (maru-nil))))
+(defprimitive set-string-at ((string string-object)
+                             (index abstract-long-object)
+                             (value abstract-long-object))
+  (let ((i (object-value index))
+        (char (object-value value)))
+    (if (and (>= i 0) (< i (string-object-size string)))
+        (progn
+          (setf (elt (object-value string) i) (code-char char))
+          string)
+        (maru-nil))))
 
 ; expr
 ; > IDL: imaru implementation ignores extra args
-(defun maru-primitive-long->string (ctx args)
-  (declare (ignore ctx))
+(defprimitive long->string ((value nil :optional))
   (cond ((zerop (maru-length args)) (maru-nil))
-        ((typep (maru-car args) 'string-object) (maru-car args))
-        ((typep (maru-car args) 'number-object)
-         (mk-string :value (object-value (maru-car args))))
-        ((typep (maru-car args) 'char-object)
+        ((typep value 'string-object) value)
+        ((typep value 'number-object)
+         (mk-string :value (object-value value)))
+        ((typep value 'char-object)
          (error 'missing-feature))
         (t (maru-nil))))
 
 ; expr
 ; > IDL: imaru implementation ignores extra args
-(defun maru-primitive-string->symbol (ctx args)
+(defprimitive string->symbol ((value nil :optional))
   (cond ((zerop (maru-length args)) (maru-nil))
-        ((typep (maru-car args) 'symbol-object) (maru-car args))
-        ((typep (maru-car args) 'string-object)
+        ((typep value 'symbol-object) value)
+        ((typep value 'string-object)
          ;; don't copy the null terminator
          (maru-intern ctx (object-value
-                            (maru-string-to-symbol (maru-car args)))))
+                            (maru-string-to-symbol value))))
         (t (maru-nil))))
 
 ; expr
 ; > IDL: imaru implementation ignores extra args
-(defun maru-primitive-symbol->string (ctx args)
-  (declare (ignore ctx))
+(defprimitive symbol->string ((value nil :optional))
   (cond ((zerop (maru-length args)) (maru-nil))
-        ((typep (maru-car args) 'string-object) (maru-car args))
-        ((typep (maru-car args) 'symbol-object)
-         (mk-string :value (object-value (maru-car args))))
+        ((typep value 'string-object) value)
+        ((typep value 'symbol-object)
+         (mk-string :value (object-value value)))
         (t (maru-nil))))
 
 ; expr
-(defun maru-primitive-form (ctx args)
-  (declare (ignore ctx))
-  (assert (and (= 1 (maru-length args))
-               (typep (maru-car args) 'runtime-closure-object)))
-  (mk-form (maru-car args)))
+(defprimitive form ((fn 'runtime-closure-object))
+  (mk-form fn))
 
 ; expr
 ; array argument is optional; default to size 0
 ; IDL: imaru will take any arguments to 'array'; if the first argument
-; isn't a long it will create a size 0 array
-(defun maru-primitive-array (ctx args)
-  (declare (ignore ctx))
-  (assert (and (<= (maru-length args) 1)))
-  (if (zerop (maru-length args))
+;      isn't a long it will create a size 0 array
+(defprimitive array ((size nil :optional))
+  (if (or (zerop (maru-length args))
+          (not (typep size 'abstract-long-object)))
       (mk-array 0)
-      (mk-array (object-value (maru-car args)))))
+      (mk-array (object-value size))))
 
 ; expr
-(defun maru-primitive-array-length (ctx args)
-  (declare (ignore ctx))
-  (assert (and (= 1 (maru-length args))
-               (typep (maru-car args) 'array-object)))
-  (mk-number (length (array-object-elements (maru-car args)))))
+(defprimitive array-length ((array array-object))
+  (mk-number (length (array-object-elements array))))
 
 ; expr
-(defun maru-primitive-array-at (ctx args)
-  (declare (ignore ctx))
-  (assert (and (= 2 (maru-length args))
-               (typep (maru-car args) 'array-object)
-               (typep (maru-cadr args) 'number-object)))
-  (let ((arr (array-object-elements (maru-car args)))
-        (index (object-value (maru-cadr args))))
-    (if (>= index (length arr))
+(defprimitive array-at ((array array-object) (index number-object))
+  (let ((arr (array-object-elements array))
+        (i (object-value index)))
+    (if (>= i (length arr))
         (maru-nil) ; return nil if out of bounds
-        (svref arr index))))
+        (svref arr i))))
 
 ; expr
-(defun maru-primitive-set-array-at (ctx args)
-  (declare (ignore ctx))
-  (assert (and (= 3 (maru-length args))
-               (typep (maru-car args) 'array-object)
-               (typep (maru-cadr args) 'number-object)))
-  (let ((index (object-value (maru-cadr args))))
+(defprimitive set-array-at ((array array-object)
+                            (index number-object)
+                            value)
+  (let ((i (object-value index)))
     ;; handle array resizing
     ;; > FIXME: maybe should use fill pointer + vector-push-extend
-    (when (>= index (length (array-object-elements (maru-car args))))
-        (let ((arr (array-object-elements (maru-car args))))
-          (setf (array-object-elements (maru-car args))
-                (init-vector (1+ index) :initial-element (maru-nil)))
-          (copy-vector (array-object-elements (maru-car args))
+    (when (>= i (length (array-object-elements array)))
+        (let ((arr (array-object-elements array)))
+          (setf (array-object-elements array)
+                (init-vector (1+ i) :initial-element (maru-nil)))
+          (copy-vector (array-object-elements array)
                        arr)))
-    (setf (svref (array-object-elements (maru-car args))
-                 (object-value (maru-cadr args)))
-          (maru-caddr args))))
+    (setf (svref (array-object-elements array) i) value)))
 
 ; expr
 ; > imaru ignores extra arguments
-(defun maru-primitive-array? (ctx args)
-  (declare (ignore ctx))
-  (assert (and (= 1 (maru-length args))))
-  (mk-bool (maru-array? (maru-car args))))
+(defprimitive array? (value)
+  (mk-bool (maru-array? value)))
 
 ; expr
-(defun maru-primitive-allocate (ctx args)
-  (declare (ignore ctx))
-  (assert (= 2 (maru-length args)))
+(defprimitive allocate (type size)
   ;; return nil if either argument is not a number (long)
-  (when (not (and (typep (maru-car args) 'number-object)
-                  (typep (maru-cadr args) 'number-object)))
+  (when (not (and (typep type 'number-object)
+                  (typep size 'number-object)))
     (return-from maru-primitive-allocate (maru-nil)))
-  (mk-raw (object-value (maru-car args)) (object-value (maru-cadr args))))
+  (mk-raw (object-value type) (object-value size)))
 
 ; expr
-(defun maru-primitive-set-oop-at (ctx args)
-  (declare (ignore ctx))
-  (assert (= 3 (maru-length args)))
-  (let ((raw (maru-car args))
-        (index (maru-cadr args)))
-    ;; fail if we try to use set-oop-at on non raw objects
-    (assert (typep raw 'raw-object))
-    ;; return nil if index argument is not a number (long)
-    (when (not (typep index 'number-object))
+(defprimitive set-oop-at ((raw raw-object) index value)
+  ;; fail if we try to use set-oop-at on non raw objects
+  (assert (typep raw 'raw-object))
+  ;; return nil if index argument is not a number (long)
+  (when (not (typep index 'number-object))
+    (return-from maru-primitive-set-oop-at (maru-nil)))
+  (let ((native-index (object-value index))
+        (mem (raw-object-mem raw)))
+    ;; return nil if index is out of range
+    (when (not (and (>= native-index 0) (< native-index (length mem))))
       (return-from maru-primitive-set-oop-at (maru-nil)))
-    (let ((native-index (object-value index))
-          (mem (raw-object-mem raw)))
-      ;; return nil if index is out of range
-      (when (not (and (>= native-index 0) (< native-index (length mem))))
-        (return-from maru-primitive-set-oop-at (maru-nil)))
-      (setf (svref mem native-index) (maru-caddr args)))))
+    (setf (svref mem native-index) value)))
 
 ; expr
-(defun maru-primitive-oop-at (ctx args)
-  (declare (ignore ctx))
-  (assert (= 2 (maru-length args)))
-  (let ((raw (maru-car args))
-        (index (maru-cadr args)))
-    ;; accout for the imaru nil exception
-    (when (maru-nil? (maru-car args))
+(defprimitive oop-at (raw index)
+  ;; accout for the imaru nil exception
+  (when (maru-nil? (maru-car args))
+    (return-from maru-primitive-oop-at (maru-nil)))
+  ;; HACK (required in gen-definition <expr>)
+  (when (typep raw 'runtime-closure-object)
+    (assert (= 0 (object-value index)))
+    (return-from maru-primitive-oop-at
+      (runtime-closure-object-src raw)))
+  ;; fail if we try to use set-oop-at on non raw objects (other than
+  ;; nil)
+  (assert (typep raw 'raw-object))
+  ;; return nil if index argument is not a number (long)
+  (when (not (typep index 'number-object))
+    (return-from maru-primitive-oop-at (maru-nil)))
+  (let ((native-index (object-value index))
+        (mem (raw-object-mem raw)))
+    ;; return nil if index is out of range
+    (when (not (and (>= native-index 0) (< native-index (length mem))))
       (return-from maru-primitive-oop-at (maru-nil)))
-    ;; HACK (required in gen-definition <expr>)
-    (when (typep raw 'runtime-closure-object)
-      (assert (= 0 (object-value index)))
-      (return-from maru-primitive-oop-at
-        (runtime-closure-object-src raw)))
-    ;; fail if we try to use set-oop-at on non raw objects (other than
-    ;; nil)
-    (assert (typep raw 'raw-object))
-    ;; return nil if index argument is not a number (long)
-    (when (not (typep index 'number-object))
-      (return-from maru-primitive-oop-at (maru-nil)))
-    (let ((native-index (object-value index))
-          (mem (raw-object-mem raw)))
-      ;; return nil if index is out of range
-      (when (not (and (>= native-index 0) (< native-index (length mem))))
-        (return-from maru-primitive-oop-at (maru-nil)))
-      (svref mem native-index))))
+    (svref mem native-index)))
 
 ; expr
 (defun maru-primitive-exit (ctx args)
@@ -1378,13 +1352,11 @@
 
 ; expr
 ; > FIXME: this behavior is an approximation of correctness/imaru
-(defun maru-primitive-current-environment (ctx args)
-  (assert (zerop (maru-length args)))
+(defprimitive current-environment ()
   (internal-list-to-maru-list (maru-env-bindings (maru-context-env ctx))))
 
 ; expr
-(defun maru-primitive-_global-environment (ctx args)
-  (assert (zerop (maru-length args)))
+(defprimitive _global-environment ()
   (internal-list-to-maru-list (maru-env-bindings (maru-root-env ctx))))
 
 ; expr
@@ -3521,8 +3493,8 @@
 
 (deftest test-maru-array-primitive-default-bug
   (let ((ctx (maru-initialize))
-        (src "(array)"))
-    (eq-object (mk-array 0)
+        (src "(cons (array) (array \"a\"))"))
+    (eq-object (mk-pair (mk-array 0) (mk-array 0))
                (maru-all-transforms ctx src))))
 
 (deftest test-maru-set-array-at-primitive
