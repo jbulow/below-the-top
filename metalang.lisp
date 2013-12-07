@@ -2070,7 +2070,7 @@
                    (whatami (eql 'arg)))
   (declare (special *ctx*))
   (when *forwarding-symbol*
-    (return-from inform `(nil . ,*forwarding-symbol*)))
+    (return-from inform *forwarding-symbol*))
   (let ((binding (maru-lookup *ctx* object)))
     (if binding
         (let ((*forwarding-symbol* object))
@@ -2095,7 +2095,7 @@
                  (args list-object))
   (declare (special *ctx*))
   (when *forwarding-symbol*
-    (return-from pass `(nil . ,(tcons *forwarding-symbol* args))))
+    (return-from pass (tcons *forwarding-symbol* args)))
   (let ((binding (maru-lookup *ctx* object)))
     (if binding
         (let ((*forwarding-symbol* object))
