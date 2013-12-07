@@ -1069,14 +1069,12 @@
   (maru-boolean-cmp a b #'>=))
 
 ; pseudoform
-(defun maru-primitive-set (ctx args)
-  (declare (ignore ctx))
-  (assert (= 2 (maru-length args)))
-  (cond ((maru-list? (maru-car args))
+(defprimitive set ((symbol (symbol-object pair-object)) value)
+  (cond ((maru-list? symbol)
          (mk-pair (mk-symbol (scat "set-"
-                               (object-value (maru-caar args))))
-                  (maru-concat (maru-cdar args) (maru-cdr args))))
-        (t (mk-pair (mk-symbol "seth") args))))
+                               (object-value (maru-car symbol))))
+                  (maru-non-destructive-attach (maru-cdr symbol) value)))
+        (t (mk-list (mk-symbol "seth") symbol value))))
 
 ; fixed
 ; FIXME: make sure the symbol is actually internd
@@ -1457,10 +1455,12 @@
     (declare (ignore n))
     0))
 
-(defmethod maru-concat ((lhs list-object) (rhs list-object))
-  (if (maru-nil? lhs)
-      rhs
-      (mk-pair (maru-car lhs) (maru-concat (maru-cdr lhs) rhs))))
+(defmethod maru-non-destructive-attach ((list list-object)
+                                        (new-last basic-object))
+  (if (maru-nil? list)
+      (mk-list new-last)
+      (mk-pair (maru-car list)
+               (maru-non-destuctive-attach (maru-cdr list) new-last))))
 
 ;; FIXME: use defgeneric
 (defmethod maru-last ((pair pair-object) &optional (n 1))
