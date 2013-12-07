@@ -70,6 +70,13 @@
 (defun paren? (c)
   (member c '(#\( #\))))
 
+(defstruct read-table-entry
+  terminating
+  handler)
+
+(defun rte (terminating handler)
+  (make-read-table-entry :terminating terminating :handler handler))
+
 (defun tokenize-parenlist (next-char-fn read-table)
   (let ((c (funcall next-char-fn))
         (exprs '()))
@@ -98,15 +105,16 @@
 
 ;; caller must _know_ that the first character is 'valid'
 ;; FIXME: should terminate on read macros
-(defun tokenize-characters (next-char-fn &optional (so-far ""))
+(defun tokenize-characters (next-char-fn read-table &optional (so-far ""))
   (let ((c (funcall next-char-fn)))
     (assert (not (string= c 'negative-space)))
-    (cond ((null c) so-far)
-          ((paren? c)
+    (cond ((or (whitespace? c) (null c)) so-far)
+          ((or (paren? c) (terminating-read-macro? c read-table))
            (funcall next-char-fn 'unread)
            so-far)
-          ((whitespace? c) so-far)
-          (t (tokenize-characters next-char-fn (scat so-far c))))))
+          (t (tokenize-characters next-char-fn
+                                  read-table
+                                  (scat so-far c))))))
 
 ;;;; Tokenizes a single sexpr
 ;;;; > FIXME: we could treat #\( as a macro character
@@ -123,7 +131,7 @@
           ((read-macro? c read-table)
            (funcall (read-macro-fn c read-table) next-char-fn read-table))
           (t (funcall next-char-fn 'unread)
-             (tokenize-characters next-char-fn)))))
+             (tokenize-characters next-char-fn read-table)))))
 
 ;; ``default'' : remove and return the next character from the stream
 ;; count       : the number of characters successfuly read from the stream
@@ -231,9 +239,14 @@
 (defun read-macro? (c read-table)
   (assoc c read-table :test #'char=))
 
+(defun terminating-read-macro? (c read-table)
+  (let ((macro (assoc c read-table :test #'char=)))
+    (when macro
+      (read-table-entry-terminating (cdr macro)))))
+
 (defun read-macro-fn (c read-table)
   (assert (read-macro? c read-table))
-  (cdr (assoc c read-table)))
+  (read-table-entry-handler (cdr (assoc c read-table))))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -2340,17 +2353,17 @@
 
 (deftest test-tokenize-characters
   (let ((next-char-fn (next-char-factory "only the first")))
-    (and (equal (tokenize-characters next-char-fn) "only")
-         (equal (tokenize-characters next-char-fn) "the")
-         (equal (tokenize-characters next-char-fn) "first")
-         (equal (tokenize-characters next-char-fn) ""))))
+    (and (equal (tokenize-characters next-char-fn nil) "only")
+         (equal (tokenize-characters next-char-fn nil) "the")
+         (equal (tokenize-characters next-char-fn nil) "first")
+         (equal (tokenize-characters next-char-fn nil) ""))))
 
 (deftest test-tokenize-characters-paren-bug
   (let ((next-char-fn (next-char-factory "some-expr)")))
-    (and (equal (tokenize-characters next-char-fn) "some-expr")
+    (and (equal (tokenize-characters next-char-fn nil) "some-expr")
          (char= (funcall next-char-fn 'peek) #\))
-         (equal (tokenize-characters next-char-fn) "")
-         (equal (tokenize-characters next-char-fn) ""))))
+         (equal (tokenize-characters next-char-fn nil) "")
+         (equal (tokenize-characters next-char-fn nil) ""))))
 
 (deftest test-simple-tokenize
   (let ((next-char-fn (next-char-factory "tokenize this plz")))
@@ -2368,42 +2381,49 @@
   "double quotes terminate symbols in imaru"
   (let ((next-char-fn
           (next-char-factory "(this\"is\"(awesome\"k\"ney))")))
-    (equal (tokenize next-char-fn)
+    (equal (tokenize next-char-fn
+                     `((#\" . ,(rte t #'doublequote-handler))))
            '("this" "\"is\"" ("awesome" "\"k\"" "ney")))))
 
 (deftest test-dot
   (let ((src "'(1 . (2 . (3 . 4)))"))
     (equal '("quote" . (("1" . ("2" . ("3" . "4"))) . nil))
-           (tokenize (next-char-factory src) '((#\' . quote-handler))))))
+           (tokenize (next-char-factory src)
+                     `((#\' . ,(rte t #'quote-handler)))))))
 
 (deftest test-dot-2
   (let ((src "'((a . b) . (1 . (($ . 3) . 4)))"))
     (equal '("quote" . ((("a" . "b") . ("1" . (("$" . "3") . "4"))). nil))
-           (tokenize (next-char-factory src) '((#\' . quote-handler))))))
+           (tokenize (next-char-factory src)
+                     `((#\' . ,(rte t #'quote-handler)))))))
 
 (deftest test-dot-3
   (let ((src "'(a b (c d e . f))"))
     (equal '("quote" ("a" "b" ("c" "d" "e" . "f")))
-           (tokenize (next-char-factory src) '((#\' . quote-handler))))))
+           (tokenize (next-char-factory src)
+                     `((#\' . ,(rte t #'quote-handler)))))))
 
 (deftest test-too-many-with-dots
   (let ((src "'(a . (b . c . d))"))
     (must-signal token-error
-      (tokenize (next-char-factory src) '((#\' . quote-handler))))))
+      (tokenize (next-char-factory src)
+                `((#\' . ,(rte t #'quote-handler)))))))
 
 (deftest test-not-enough-with-dots
   (let ((src "'( a . ( b . (. e)))"))
     (must-signal token-error
-      (tokenize (next-char-factory src) '((#\' . quote-handler))))))
+      (tokenize (next-char-factory src)
+                `((#\' . ,(rte t #'quote-handler)))))))
 
 (deftest test-no-token
   (let ((src0 "")
         (src1 (scat "   " #\Tab #\Newline "   ")))
     (and (must-signal token-error
-           (tokenize (next-char-factory src0) '((#\' . quote-handler))))
+           (tokenize (next-char-factory src0)
+                     `((#\' . ,(rte t #'quote-handler)))))
          (must-signal token-error
            (tokenize (next-char-factory src1)
-                     '((#\' . quote-handler)))))))
+                     `((#\' . ,(rte t #'quote-handler))))))))
 
 (deftest test-untype-everything
   (let ((next-char-fn
@@ -2441,7 +2461,7 @@
 (deftest test-desugar
   (let ((next-char-fn
           (next-char-factory "(this ,@(is text) ,so is ,,this)"))
-        (read-table '((#\, . unquote-handler))))
+        (read-table `((#\, . ,(rte t #'unquote-handler)))))
     (equal (tokenize next-char-fn read-table)
            '("this" ("unquote-splicing" ("is" "text")) ("unquote" "so")
              "is" ("unquote" ("unquote" "this"))))))
@@ -2449,7 +2469,7 @@
 (deftest test-desugar-quote
   (let ((next-char-fn
           (next-char-factory "(123 ''and '(a b c))"))
-        (read-table '((#\' . quote-handler))))
+        (read-table `((#\' . ,(rte t #'quote-handler)))))
     (equal (tokenize next-char-fn read-table)
            '("123" ("quote" ("quote" "and"))
                    ("quote" ("a" "b" "c"))))))
@@ -2457,7 +2477,7 @@
 (deftest test-desugar-quasiquote
   (let ((next-char-fn
           (next-char-factory "(842 `(this that another (9)) `4)"))
-        (read-table '((#\` . quasiquote-handler))))
+        (read-table `((#\` . ,(rte t #'quasiquote-handler)))))
     (equal (tokenize next-char-fn read-table)
            '("842" ("quasiquote" ("this" "that" "another" ("9")))
              ("quasiquote" "4")))))
@@ -2767,10 +2787,12 @@
                                (mk-number 14)))))))      ;; else
 
 (defun untype-expr (src)
-  (let* ((read-table '((#\' . quote-handler) (#\, . unquote-handler)
-                       (#\` . quasiquote-handler)
-                       (#\" . doublequote-handler)
-                       (#\; . semicolon-handler) (#\? . qmark-handler)))
+  (let* ((read-table `((#\' . ,(rte t #'quote-handler))
+                       (#\, . ,(rte t #'unquote-handler))
+                       (#\` . ,(rte t #'quasiquote-handler))
+                       (#\" . ,(rte t #'doublequote-handler))
+                       (#\; . ,(rte t #'semicolon-handler))
+                       (#\? . ,(rte nil #'qmark-handler))))
          (factory (next-char-factory src))
          (untyped (untype-everything (tokenize factory read-table))))
     (values untyped (funcall factory 'count))))
@@ -2827,9 +2849,14 @@
 (defparameter *boot* "/home/burrows/code/maru-bstrap/boot.l")
 (defparameter *emit* "/home/burrows/code/maru-bstrap/emit.l")
 (defparameter *eval* "/home/burrows/code/maru-bstrap/eval.l")
+(defparameter *seval* "/home/burrows/code/maru-bstrap/seval.l")
 
 (defun all ()
   (process-file *eval* (process-file *emit* (process-file *boot*)))
+  nil)
+
+(defun sall ()
+  (process-file *seval* (process-file *emit* (process-file *boot*)))
   nil)
 
 (defun part ()
@@ -4033,7 +4060,7 @@
           (untyped-expr (untype-everything
                           (tokenize
                             (next-char-factory "'(1 (2 . 3))")
-                            '((#\' . quote-handler))))))
+                            `((#\' . ,(rte t #'quote-handler)))))))
       (and (rude-eq-tree `(,(mk-untyped "quote")
                            (,(mk-untyped "1")
                              (,(mk-untyped "2") . ,(mk-untyped "3"))))
@@ -4392,3 +4419,23 @@
     (eq-object (mk-list (mk-bool t) (mk-bool nil) (mk-bool t))
                (maru-all-transforms ctx src))))
 
+(deftest test-eq
+  (let ((ctx (maru-initialize))
+        (src "(_list (= (array) (array)) (= \"young\" \"young\")
+                     (= '(1 2) '(1 2)))")
+        (src0 "(_list (= 'this 'this) (= 'this 'that))")
+        (src1 "(block
+                 (define a (array))
+                 (define b a)
+                 (define c '(1 2))
+                 (define d c)
+                 (_list (= a b) (= b a) (= a a) (= b b)
+                        (= c d) (= d c) (= c c) (= d d)))"))
+    (and (eq-object (mk-list (maru-nil) (mk-bool t) (maru-nil))
+                    (maru-all-transforms ctx src))
+         (eq-object (mk-list (mk-bool t) (maru-nil))
+                    (maru-all-transforms ctx src0))
+         (eq-object (mk-list (mk-bool t) (mk-bool t) (mk-bool t)
+                             (mk-bool t) (mk-bool t) (mk-bool t)
+                             (mk-bool t) (mk-bool t))
+                    (maru-all-transforms ctx src1)))))
