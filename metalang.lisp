@@ -1460,7 +1460,7 @@
   (if (maru-nil? list)
       (mk-list new-last)
       (mk-pair (maru-car list)
-               (maru-non-destuctive-attach (maru-cdr list) new-last))))
+               (maru-non-destructive-attach (maru-cdr list) new-last))))
 
 ;; FIXME: use defgeneric
 (defmethod maru-last ((pair pair-object) &optional (n 1))
