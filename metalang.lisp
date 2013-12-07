@@ -6,19 +6,14 @@
 ;;;; > translation manager, translations against sexpressions
 
 ;;;; TODO
-;;;; > How do we want to handle lists? Do we want to support eval_pair
-;;;;   like behavior in our infrastructure? Does it even make sense in
-;;;;   our model?
-;;;;   + ((do-something 1 2) 3 4)   ; must send message to list form
-;;;;   + ()                         ; indiciates not true
 ;;;; > Determine the best way to consolidate default behaviors in
 ;;;;   transformations.
 ;;;; > write macros to cleanup maru initialization
 ;;;;   + arithmetic
-;;;; > *applicators*, *expanders*
+;;;; > *expanders*
 ;;;; > array and list comparison can't use eq-object behind ``='' as the
 ;;;;   test needs to determine if they are the same object
-;;;; > why do we need to duplicate the null terminator implementation
+;;;; > should we duplicate the null terminator implementation
 ;;;;   for strings?
 ;;;; > fix the disparity between chars and numbers that doesn't exist in
 ;;;;   imaru (longs)
@@ -1151,18 +1146,38 @@
   (finish-output)
   (maru-nil))
 
+(defun octal-escape (char)
+  (let ((code (char-code char)))
+    (if (and (>= code (char-code #\Space)) (< code 127))
+        (cond ((char= #\" char) "\\\"")
+              ((char= #\\ char) "\\\\")
+              (t char))
+        (format nil "\\~3,'0O" code))))
+
+(defun string-to-list (string)
+  (loop for char across string
+        collect char))
+
 ; expr
-; FIXME: make nicer output/match imaru
 (defun maru-primitive-dump (ctx args)
   (declare (ignore ctx))
-  (format t "~A" (maru-printable-object args))
+  (dolist (a (maru-list-to-internal-list-1 args))
+    (when (typep a 'string-object)
+      (format t "\""))
+    (let ((output ""))
+      (dolist (char (string-to-list (maru-printable-object a)) output)
+        (setf output (scat output (octal-escape char))))
+      (format t "~A" output)
+      (when (typep a 'string-object)
+        (format t "\""))))
+  (finish-output)
   (maru-nil))
 
 ; expr
-; FIXME: make nicer output/match imaru
 (defun maru-primitive-warn (ctx args)
   (declare (ignore ctx))
   (format *error-output* "~A" (maru-printable-object args))
+  (finish-output *error-output*)
   (maru-nil))
 
 ; expr
@@ -2205,6 +2220,66 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;   maru high level helpers
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(defun untype-expr (src)
+  (let* ((read-table `((#\' . ,(rte t #'quote-handler))
+                       (#\, . ,(rte t #'unquote-handler))
+                       (#\` . ,(rte t #'quasiquote-handler))
+                       (#\" . ,(rte t #'doublequote-handler))
+                       (#\; . ,(rte t #'semicolon-handler))
+                       (#\? . ,(rte nil #'qmark-handler))))
+         (factory (next-char-factory src))
+         (untyped (untype-everything (tokenize factory read-table))))
+    (values untyped (funcall factory 'count))))
+
+(defun type-expr (ctx src)
+  (multiple-value-bind (untyped count)
+        (untype-expr src)
+    (values (transform (maru-typer) untyped ctx) count)))
+
+(defun maru-expand->eval (ctx expr)
+  (let ((expand-transformer (make-transformer :name 'expand))
+        (pseudoexpand-transformer (make-transformer :name 'pseudoexpand))
+        (eval-transformer (make-transformer :name 'eval))
+        (expanded-expr nil)
+        (pexpanded-expr nil)
+        (evald-expr nil))
+    (setf expanded-expr
+          (transform expand-transformer
+                     expr
+                     ctx
+                     :tfuncs (maru-tfuncs)))
+    ; (when (atom expanded-expr)
+        ; (format t "EXPAND: ~A~%" (maru-printable-object expanded-expr)))
+    (setf pexpanded-expr
+          (transform pseudoexpand-transformer
+                     expanded-expr
+                     ctx
+                     :tfuncs (maru-tfuncs)))
+    ; (when (atom expanded-expr)
+        ; (format t "PEXPAND: ~A~%"
+                  ; (maru-printable-object pexpanded-expr)))
+    (setf evald-expr
+          (transform eval-transformer
+                     pexpanded-expr
+                     ctx
+                     :tfuncs (maru-tfuncs)))
+    ; (when (atom evald-expr)
+        ; (format t "EVALD : ~A~%" (maru-printable-object evald-expr)))
+    evald-expr))
+
+(defun maru-all-transforms (ctx src)
+  (multiple-value-bind (typed-expr count)
+        (type-expr ctx src)
+    ; (when (atom typed-expr)
+        ; (format t "TYPED: ~A~%" (maru-printable-object typed-expr)))
+    (values (maru-expand->eval ctx typed-expr) count)))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;         file i/o
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -2217,16 +2292,53 @@
 ;; > the imaru execution model does all transformations on one
 ;; sexpression before moving on
 (defun process-file (path &optional ctx)
-  (let ((ctx (or ctx (maru-initialize)))
-        (src (read-file path)))
-    (do ((count 0 count))
-                   ;; kludge
-        ((>= count (- (length src) 5)) ctx)
-      (multiple-value-bind (out new-count)
-          (maru-all-transforms ctx (subseq src count))
-        (declare (ignore out))
-        (format t "C: ~A~%" count)
-        (setf count (+ count new-count))))))
+  (format *error-output* "processing: ~A~%" path)
+  (unwind-protect
+    (let ((ctx (or ctx (maru-initialize)))
+          (src (read-file path)))
+      (do ((count 0 count))
+                     ;; kludge
+          ((>= count (- (length src) 5)) ctx)
+        (multiple-value-bind (out new-count)
+            (maru-all-transforms ctx (subseq src count))
+          (declare (ignore out))
+          (format *error-output* "~A~A" count #\Tab)
+          (finish-output *error-output*)
+          (setf count (+ count new-count)))))
+    (format *error-output* "~%")))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;      debugging/etc
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(defun exec (src)
+  (declare (special *ctx*))
+  (maru-printable-object
+    (maru-all-transforms *ctx* (scat "(block " src " )"))))
+
+(defparameter *boot* "/home/burrows/code/maru-bstrap/boot.l")
+(defparameter *emit* "/home/burrows/code/maru-bstrap/emit.l")
+(defparameter *eval* "/home/burrows/code/maru-bstrap/eval.l")
+(defparameter *seval* "/home/burrows/code/maru-bstrap/seval.l")
+
+(defun all ()
+  (with-open-file (stream "cl-eval.s"
+                          :direction         :output
+                          :if-exists         :supersede
+                          :if-does-not-exist :create)
+    (let ((*standard-output* stream))
+      (process-file *eval* (process-file *emit* (process-file *boot*)))))
+  nil)
+
+(defun sall ()
+  (process-file *seval* (process-file *emit* (process-file *boot*)))
+  nil)
+
+(defun part ()
+  (process-file *emit* (process-file *boot*))
+  nil)
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -2785,91 +2897,6 @@
                                (maru-nil)                 ;; predicate
                                (mk-number 12)           ;; then
                                (mk-number 14)))))))      ;; else
-
-(defun untype-expr (src)
-  (let* ((read-table `((#\' . ,(rte t #'quote-handler))
-                       (#\, . ,(rte t #'unquote-handler))
-                       (#\` . ,(rte t #'quasiquote-handler))
-                       (#\" . ,(rte t #'doublequote-handler))
-                       (#\; . ,(rte t #'semicolon-handler))
-                       (#\? . ,(rte nil #'qmark-handler))))
-         (factory (next-char-factory src))
-         (untyped (untype-everything (tokenize factory read-table))))
-    (values untyped (funcall factory 'count))))
-
-(defun type-expr (ctx src)
-  (multiple-value-bind (untyped count)
-        (untype-expr src)
-    (values (transform (maru-typer) untyped ctx) count)))
-
-(defun maru-expand->eval (ctx expr)
-  (let ((expand-transformer (make-transformer :name 'expand))
-        (pseudoexpand-transformer (make-transformer :name 'pseudoexpand))
-        (eval-transformer (make-transformer :name 'eval))
-        (expanded-expr nil)
-        (pexpanded-expr nil)
-        (evald-expr nil))
-    (setf expanded-expr
-          (transform expand-transformer
-                     expr
-                     ctx
-                     :tfuncs (maru-tfuncs)))
-    ; (when (atom expanded-expr)
-        ; (format t "EXPAND: ~A~%" (maru-printable-object expanded-expr)))
-    (setf pexpanded-expr
-          (transform pseudoexpand-transformer
-                     expanded-expr
-                     ctx
-                     :tfuncs (maru-tfuncs)))
-    ; (when (atom expanded-expr)
-        ; (format t "PEXPAND: ~A~%"
-                  ; (maru-printable-object pexpanded-expr)))
-    (setf evald-expr
-          (transform eval-transformer
-                     pexpanded-expr
-                     ctx
-                     :tfuncs (maru-tfuncs)))
-    ; (when (atom evald-expr)
-        ; (format t "EVALD : ~A~%" (maru-printable-object evald-expr)))
-    evald-expr))
-
-(defun maru-all-transforms (ctx src)
-  (multiple-value-bind (typed-expr count)
-        (type-expr ctx src)
-    ; (when (atom typed-expr)
-        ; (format t "TYPED: ~A~%" (maru-printable-object typed-expr)))
-    (values (maru-expand->eval ctx typed-expr) count)))
-
-;; for debugging
-(defun exec (src)
-  (declare (special *ctx*))
-  (maru-printable-object
-    (maru-all-transforms *ctx* (scat "(block " src " )"))))
-
-(defparameter *boot* "/home/burrows/code/maru-bstrap/boot.l")
-(defparameter *emit* "/home/burrows/code/maru-bstrap/emit.l")
-(defparameter *eval* "/home/burrows/code/maru-bstrap/eval.l")
-(defparameter *seval* "/home/burrows/code/maru-bstrap/seval.l")
-
-(defun all ()
-  (process-file *eval* (process-file *emit* (process-file *boot*)))
-  nil)
-
-(defun sall ()
-  (process-file *seval* (process-file *emit* (process-file *boot*)))
-  nil)
-
-(defun part ()
-  (process-file *emit* (process-file *boot*))
-  nil)
-
-#|
-(defun part-p ()
-  (sb-sprof:with-profiling (:max-samples 10000
-                            :report      :graph
-                            :loop        nil)
-    (process-file *emit* (process-file *boot*))))
-|#
 
 (deftest test-maru-eval-with-fixed
   (let* ((ctx (maru-initialize))
@@ -4322,9 +4349,12 @@
 
 (deftest test-maru-dump-primitive
   (let ((ctx (maru-initialize))
-        (src "(dump 567)"))
-    (maru-all-transforms ctx src)
-    nil))
+        (src "(dump \"\\2ambi\\77tion\\177\")"))
+    (let* ((stream (make-string-output-stream))
+           (*standard-output* stream))
+      (maru-all-transforms ctx src)
+      (string= "\\002ambi?tion\\177"
+               (get-output-stream-string stream)))))
 
 (deftest test-maru-symbol?-primitive
   (let ((ctx (maru-initialize))
