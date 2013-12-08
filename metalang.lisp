@@ -4207,8 +4207,11 @@
                    (println \"hello \" a \"world\"))"))
     (maru-all-transforms ctx src)
     ;; FIXME: test the output of some stream
-    (maru-all-transforms ctx use-it)
-    nil))
+    (let* ((stream (make-string-output-stream))
+           (*standard-output* stream))
+      (maru-all-transforms ctx use-it)
+      (string= (scat "hello 10world" #\Newline)
+               (get-output-stream-string stream)))))
 
 (deftest test-print-newlines
   (let ((ctx (maru-initialize))
