@@ -3,7 +3,7 @@ below-the-top
 
 #### What is this?
 ``below-the-top'' is two pieces of code.  The first piece is an engine for interpreting code in sexpression
-languages, commonly lisp.  The front end of the engine is a tokenizor (that is capable of handling read macros).
+languages, commonly lisps.  The front end of the engine is a tokenizor (that is capable of handling read macros).
 On top of the tokenizor is the transformation machine.  This machine takes a set of sexpressions and maps them into
 some result set (often another set of sexpressions).  In this implementation you can see me use several different
 transformers which feed into one another: 'type, 'expand, 'eval.  Take a look at transform(...),
