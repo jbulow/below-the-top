@@ -812,6 +812,35 @@
 (define-condition missing-feature (error)
   ())
 
+(define-condition bad-primitive-arg-list (error)
+  ())
+
+(defun primitive-assert (test)
+  (if (null test)
+      (error 'bad-primitive-arg-list)
+      t))
+
+(defun sanity-check-params (params &optional (optioned nil))
+  (when (null params)
+    (return-from sanity-check-params t))
+  (let ((len (if (consp (car params)) (length (car params)) 1)))
+    (primitive-assert (<= len 3))
+    (let* ((l (consp (car params)))
+           (name      (if l (caar params) (car params)))
+           (type-decl (if l (cadar params) nil))
+           (status    (if (and l (= 3 len)) (caddar params) :required)))
+      (primitive-assert (typep name '(and symbol (not null))))
+      (primitive-assert (and (typep type-decl '(or symbol list))))
+      (primitive-assert (typep status '(and symbol (not null))))
+      ;; sane ordering of arg status
+      ;; > :optional params must come after required and before :rest
+      (let ((new-optioned nil))
+        (case status
+          ((:required nil)  (primitive-assert (not optioned)))
+          (:optional        (setf new-optioned t))
+          (:rest            (primitive-assert (null (cdr params)))))
+        (sanity-check-params (cdr params) new-optioned)))))
+
 (defun get-arg-range (args)
   (let ((output (cons 0 0)))
     (dolist (a args output)
@@ -864,6 +893,7 @@
                  (build-let-bindings (cdr args) (1+ index))))))
 
 (defmacro defprimitive (name arguments &rest body)
+  (sanity-check-params arguments)
   (let ((arg-range (get-arg-range arguments))
         (full-name (intern (scat "MARU-PRIMITIVE-" (to-string name)))))
     `(defun ,full-name (ctx args)
@@ -4389,3 +4419,28 @@
                              (mk-bool t) (mk-bool t) (mk-bool t)
                              (mk-bool t) (mk-bool t))
                     (maru-all-transforms ctx src1)))))
+
+(deftest test-primitive-dsl
+  (and (must-signal bad-primitive-arg-list
+         (eval '(defprimitive p ((a nil :rest) b c)
+                  nil)))
+       (must-signal bad-primitive-arg-list
+         (eval '(defprimitive q ((a nil :optional) b)
+                  nil)))
+       (must-signal bad-primitive-arg-list
+         (eval '(defprimitive r ((a nil :optional) (b nil :optional)
+                                 (c nil :required))
+                  nil)))
+       (must-signal bad-primitive-arg-list
+         (eval '(defprimitive s ((a b c d))
+                  nil)))
+       (must-signal bad-primitive-arg-list
+         (eval '(defprimitive tt ((nil nil :required))
+                  nil)))
+       (must-signal bad-primitive-arg-list
+         (eval '(defprimitive u (nil)
+                  nil)))
+       (must-signal bad-primitive-arg-list
+         (eval '(defprimitive v ((z '(a b) nil))
+                  nil)))))
+
