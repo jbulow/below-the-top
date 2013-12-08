@@ -43,3 +43,13 @@ Due to some differences between the original boot-eval.c and below-the-top you h
     ``let'' should be a ``let*''.  
 + At one point I also had to put spaces between symbols and doublequotes because the tokenizor wasn't up to the challenge; but I think this issue is now resolved.
 
+You will also need this code https://github.com/burrows-labs/lisp/blob/master/repl-utils.lisp.  repl-utils are an assortment of misc helper functions.
+
+Open metalang.lisp in your vimitor. Search for ``defparameter \*boot\*''; change the definitions for \*boot\*, \*emit\* and \*eval\* to match your system.
+
+Start your lisp environment and load repl-utils.lisp and metalang.lisp.  In sbcl you'll probably get a bunch of warnings that you should just ``continue'' through.  Next time you load it this shouldn't happen.
+
+If you issue <code>(test)</code> you should pass something like 164/166 tests (as of December 8, 2013).  Now you should be able to build ``seval.s''; but be warned that the process is very slow.  Looking up symbols in bmaru is a pitifully slow endeavor that needs to be reworked; but such is the state of things.
+
+Issue <code>(all)</code>.
+
