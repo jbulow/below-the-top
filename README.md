@@ -32,15 +32,15 @@ Due to some differences between the original boot-eval.c and below-the-top you h
   + In the function ``compile-end'' you should change what was originally <code>(cdr \*globals\*)</code> (and is not
     <code>(cdr (\_global-environment))</code>) just <code>(_global-environment)</code>.  The cdr skips \*globals\*; but we don't have
     it.
-  + variable ``forms'' does not quote {let, and, or, if, while, set, return} and variable ``operators'' unquotes
+  + variable \`\`forms'' does not quote {let, and, or, if, while, set, return} and variable ``operators'' unquotes
     {-, not, +, -, *, /, &, |, ^, <, <=, =, !=, >, <<, >>, oop-at, string-at, set-oop-at, set-string-at}.  All of these
     symbols must be quoted. imaru (ian's maru) uses a function called ``encode'' that replaces symbols binded to
     Fixed and Expr before evaluation occurs; this is the behavior that emit.l is expecting.  below-the-top does not use
     an 'encode transformer.
-  + In variable ``forms'' you must also change ``set'' to ``seth''; bmaru (burrows maru) expands set expressions into a
+  + In variable \`\`forms'' you must also change \`\`set'' to \`\`seth''; bmaru (burrows maru) expands set expressions into a
     function called ``seth'' because I didn't want to use the same symbol name for a Form and an Expr.
   + In the function <code>(define-method gen <pair> (comp) ...)</code> there is a syntax error.  The innermost
-    ``let'' should be a ``let*''.  
+    \`\`let'' should be a ``let*''.  
 + At one point I also had to put spaces between symbols and doublequotes because the tokenizor wasn't up to the challenge; but I think this issue is now resolved.
 
 You will also need this code https://github.com/burrows-labs/lisp/blob/master/repl-utils.lisp.  repl-utils are an assortment of misc helper functions.
@@ -53,5 +53,5 @@ If you issue <code>(test)</code> you should pass something like 164/166 tests (a
 
 Issue <code>(all)</code>.
 
-After the below-the-top finishes you should be able to view the output in ``cl-eval.s''.  Try ``diff''ing it with eval.s
+After the below-the-top finishes you should be able to view the output in \`\`cl-eval.s''.  Try ``diff''ing it with eval.s
 from imaru.
