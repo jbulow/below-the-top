@@ -89,7 +89,6 @@
     (reverse exprs)))
 
 ;; caller must _know_ that the first character is 'valid'
-;; FIXME: should terminate on read macros
 (defun tokenize-characters (next-char-fn read-table &optional (so-far ""))
   (let ((c (funcall next-char-fn)))
     (assert (not (string= c 'negative-space)))
@@ -959,8 +958,7 @@
 (defprimitive not (value)
   (mk-bool (maru-nil? value)))
 
-; form
-; FIXME: Should we be expanding here?
+; fixed
 (defprimitive define ((symbol symbol-object) value)
   (cdr (maru-define @ctx symbol (nice-eval value))))
 
@@ -1471,14 +1469,13 @@
       (mk-pair (maru-car list)
                (maru-non-destructive-attach (maru-cdr list) new-last))))
 
-;; FIXME: use defgeneric
-(defmethod maru-last ((pair pair-object) &optional (n 1))
-  (cond ((= n (maru-length pair)) pair)
-        (t (maru-last (maru-cdr pair) n))))
-
-(defmethod maru-last ((nl nil-object) &optional (n 1))
-  (declare (ignore n))
-  (maru-nil))
+(defgeneric maru-last (list &optional n)
+  (:method ((pair pair-object) &optional (n 1))
+    (cond ((= n (maru-length pair)) pair)
+          (t (maru-last (maru-cdr pair) n))))
+  (:method ((nl nil-object) &optional (n 1))
+    (declare (ignore nl n))
+    (maru-nil)))
 
 ;;; NOTE: nil is not a pair
 (defclass nil-object (list-object)
@@ -1810,8 +1807,6 @@
 (defmethod inform :around ((object basic-object)
                            (transformer-name (eql 'eval))
                            (whatami (eql 'lead)))
-  ; (cond ((fetch-applicator object) nil)
-        ; (t (assert (next-method-p)) (call-next-method))))
   (assert (next-method-p)) (call-next-method))
 
 (defmethod pass ((object basic-object)
@@ -2411,7 +2406,6 @@
     (equal (tokenize next-char-fn)
            '("tokenize" nil "this"))))
 
-;; FIXME: this behavior should not be hardcoded in the tokenizor
 (deftest test-tokenize-terminating-double-quote-bug
   "double quotes terminate symbols in imaru"
   (let ((next-char-fn
@@ -4018,7 +4012,6 @@
                          untyped-expr
                          :test #'eq-object)))))
 
-;; fixme
 (deftest test-noop-transform-improper-list-2
   (let-sugar (maru-tfuncs)
     (let* ((ctx (maru-initialize))
@@ -4195,7 +4188,6 @@
     (eq-object (mk-string :value "school")
                (maru-all-transforms ctx use-it))))
 
-;; FIXME: handle newlines
 (deftest test-imaru-println
   (let ((ctx (maru-initialize+))
         ;; modified; should use do-print where we use %print
@@ -4213,7 +4205,6 @@
         (use-it "(block
                    (define a 10)
                    (println \"hello \" a \"world\"))"))
-    ; (declare (ignore ctx src use-it))
     (maru-all-transforms ctx src)
     ;; FIXME: test the output of some stream
     (maru-all-transforms ctx use-it)
