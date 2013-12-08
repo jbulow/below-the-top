@@ -32,7 +32,7 @@ Due to some differences between the original boot-eval.c and below-the-top you h
   + In the function ``compile-end'' you should change what was originally <code>(cdr \*globals\*)</code> (and is now
     <code>(cdr (\_global-environment))</code>) to just <code>(_global-environment)</code>.  The cdr skips \*globals\*; but we don't have
     it.
-  + Variable \`\`forms'' does not quote {let, and, or, if, while, set, return} and variable ``operators'' unquotes
+  + Variable \`\`forms'' does not quote {let, and, or, if, while, set, return} and variable \`\`operators'' unquotes
     {-, not, +, -, *, /, &, |, ^, <, <=, =, !=, >, <<, >>, oop-at, string-at, set-oop-at, set-string-at}.  All of these
     symbols must be quoted. imaru (ian's maru) uses a function called ``encode'' that replaces symbols binded to
     Fixed and Expr before evaluation occurs; this is the behavior that emit.l is expecting.  below-the-top does not use
