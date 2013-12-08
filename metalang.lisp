@@ -3620,7 +3620,6 @@
     (eq-object (mk-list (mk-number 2) (mk-number 3) (mk-number 4))
                (maru-all-transforms ctx use-it))))
 
-;; FIXME: this seems to be close; but not quite right, hard to test
 (deftest test-maru-quasiquote
   (let ((ctx (maru-initialize))
         (src (quasiquote-src))
@@ -3634,7 +3633,6 @@
          (eq-object (mk-number 9)
                     (maru-all-transforms ctx use-it-1)))))
 
-;; FIXME: macro expansion is broken
 (deftest test-maru-quasiquote-2
   (let ((ctx (maru-initialize))
         (src (quasiquote-src))
