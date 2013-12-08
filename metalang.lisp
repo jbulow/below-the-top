@@ -820,17 +820,19 @@
       (error 'bad-primitive-arg-list)
       t))
 
-(defun sanity-check-params (params &optional (optioned nil))
+(defun build-nice-params (params &optional (optioned nil))
   (when (null params)
-    (return-from sanity-check-params t))
+    (return-from build-nice-params '()))
   (let ((len (if (consp (car params)) (length (car params)) 1)))
     (primitive-assert (<= len 3))
     (let* ((l (consp (car params)))
            (name      (if l (caar params) (car params)))
-           (type-decl (if l (cadar params) nil))
+           (type-decl (cond ((not l) nil)
+                            ((listp (cadar params)) (cadar params))
+                            (t (list (cadar params)))))
            (status    (if (and l (= 3 len)) (caddar params) :required)))
       (primitive-assert (typep name '(and symbol (not null))))
-      (primitive-assert (and (typep type-decl '(or symbol list))))
+      (primitive-assert (and (typep type-decl 'list)))
       (primitive-assert (typep status '(and symbol (not null))))
       ;; sane ordering of arg status
       ;; > :optional params must come after required and before :rest
@@ -839,91 +841,72 @@
           ((:required nil)  (primitive-assert (not optioned)))
           (:optional        (setf new-optioned t))
           (:rest            (primitive-assert (null (cdr params)))))
-        (sanity-check-params (cdr params) new-optioned)))))
+        (cons `(,name ,type-decl ,status)
+              (build-nice-params (cdr params) new-optioned))))))
 
-(defun get-arg-range (args)
+(defun get-arg-range (params)
   (let ((output (cons 0 0)))
-    (dolist (a args output)
-      (cond ((atom a)
-             (assert (not (null a)))
-             (incf (car output))
-             (incf (cdr output)))
-            (t (let ((status (caddr a)))
-                 (case status
-                   (:optional (incf (cdr output)))
-                   (otherwise
-                     (assert (or (string= status :required)
-                                 (null status)))
-                     (incf (car output))
-                     (incf (cdr output)))))))
-    output)))
-
+    (dolist (a params output)
+      (let ((status (caddr a)))
+        (case status
+          (:optional (incf (cdr output)))
+          (:rest (setf (cdr output) 100))               ;; HACK
+          (:required
+            (incf (car output))
+            (incf (cdr output)))
+          (otherwise (primitive-assert nil)))))
+    output))
 (defun maru-nth (index pair)
   (cond ((zerop index) (maru-car pair))
         (t (maru-nth (1- index) (maru-cdr pair)))))
 
-(defun build-type-assertions (args &optional (index 0))
-  (when (null args)
+(defun build-type-assertions (params &optional (index 0))
+  (when (null params)
     (return-from build-type-assertions '()))
-  (when (null (car args))
+  (when (null (car params))
     (error "bad primitive argument"))
-  (let ((option
-          (cond ((consp (car args))
-                 `(and ,(string= 'optional (caddar args))
-                       (>= ,index arg-count)))
-                (t '())))
+  (let ((option `(and ,(string= 'optional (caddar params))
+                      (>= ,index &arg-count&)))
         (type
-          (cond ((atom (car args)) t)
-                ((null (cadar args)) t)   ;; any type
-                ((consp (cadar args))
-                 `(member (type-of (maru-nth ,index args))
-                         ',(cadar args)))
-                (t `(typep (maru-nth ,index args) ',(cadar args))))))
+          (cond ((null (cadar params)) t)   ;; any type
+                (t
+                 `(some #'(lambda (type)
+                            (typep (maru-nth ,index args) type))
+                         ',(cadar params))))))
     (cons `(or ,option ,type)
-          (build-type-assertions (cdr args) (1+ index)))))
+          (build-type-assertions (cdr params) (1+ index)))))
 
+(defun build-let-bindings (params &optional (index 0))
+  (cond ((null params) '())
+        ((eq :rest (caddar params))
+         `((,(caar params) (maru-last args (- &arg-count& ,index)))))
+        (t (cons `(,(caar params) (maru-nth ,index args))
+                 (build-let-bindings (cdr params) (1+ index))))))
 
-(defun build-let-bindings (args &optional (index 0))
-  (cond ((null args) '())
-        ((null (car args)) (error "bad primitive argument"))
-        ((atom (car args)) (cons `(,(car args) (maru-nth ,index args))
-                                 (build-let-bindings (cdr args)
-                                                     (1+ index))))
-        (t (cons `(,(caar args) (maru-nth ,index args))
-                 (build-let-bindings (cdr args) (1+ index))))))
-
-(defmacro defprimitive (name arguments &rest body)
-  (sanity-check-params arguments)
-  (let ((arg-range (get-arg-range arguments))
-        (full-name (intern (scat "MARU-PRIMITIVE-" (to-string name)))))
-    `(defun ,full-name (ctx args)
-       (let ((arg-count (maru-length args)))
-         (assert (and (>= arg-count ,(car arg-range))
-                      (<= arg-count ,(cdr arg-range))))
-         (assert (and ,@(build-type-assertions arguments)))
-         (identity ctx)   ;; get rid of unused warning
-         (let (,@(build-let-bindings arguments))
-           ,@body)))))
-
-; (defprimitive prim ((a number-object :required)
-                    ; (b pair-object))
-  ; (format t "whatever"))
+(defmacro defprimitive (name params &rest body)
+  (let* ((params (build-nice-params params))
+         (arg-range (get-arg-range params)))
+    (let ((full-name (intern (scat "MARU-PRIMITIVE-" (to-string name)))))
+      `(defun ,full-name (ctx args)
+         (let ((&arg-count& (maru-length args)))
+           (primitive-assert (and (>= &arg-count& ,(car arg-range))
+                                  (<= &arg-count& ,(cdr arg-range))))
+           (primitive-assert (and ,@(build-type-assertions params)))
+           (noop ctx)
+           (noop &arg-count&)
+           (let (,@(build-let-bindings params))
+             ,@body))))))
 
 ; form
 (defprimitive quote (value)
   value)
 
 ; fixed
-(defun maru-primitive-if (ctx args)
-  (declare (ignore ctx))
-  (assert (>= (maru-length args) 2))
-  (let ((test (maru-car  args))
-        (then (maru-cadr args))
-        (else (maru-cddr args)))
-    (if (not (maru-nil? (nice-eval test)))
-        (nice-eval then)
-        ;; return ``maru-nil'' if there is no else clause
-        (implicit-block-nice-eval else))))
+(defprimitive if (test then (else nil :rest))
+  (if (not (maru-nil? (nice-eval test)))
+      (nice-eval then)
+      ;; return ``maru-nil'' if there is no else clause
+      (implicit-block-nice-eval else)))
 
 ; expr
 (defprimitive cons (head tail)
@@ -956,19 +939,17 @@
   (maru-car (maru-car list)))
 
 ; fixed
-(defun maru-primitive-and (ctx args)
-  (declare (ignore ctx))
+(defprimitive and ((tests nil :rest))
   (let ((out (mk-symbol "t")))
-    (dolist (pred (maru-list-to-internal-list-1 args) out)
+    (dolist (pred (maru-list-to-internal-list-1 tests) out)
       (setf out (nice-eval pred))
       (when (maru-nil? out)
         (return out)))))
 
 ; fixed
-(defun maru-primitive-or (ctx args)
-  (declare (ignore ctx))
+(defprimitive or ((tests nil :rest))
   (let ((out (maru-nil)))
-    (dolist (pred (maru-list-to-internal-list-1 args) out)
+    (dolist (pred (maru-list-to-internal-list-1 tests) out)
       (setf out (nice-eval pred))
       (when (not (maru-nil? out))
         (return out)))))
@@ -983,34 +964,31 @@
   (cdr (maru-define ctx symbol (nice-eval value))))
 
 ; expr
-(defun maru-primitive-block (ctx args)
-  (declare (ignore ctx))
-  ;; FIXME: should use pair object length fn
-  (if (zerop (maru-length args))
+(defprimitive block ((exprs nil :rest))
+  (if (zerop (maru-length exprs))
       (maru-nil)
-      (maru-car (maru-last args))))
+      (maru-car (maru-last exprs))))
 
 ; fixed
-(defun maru-primitive-lambda (ctx args)
-  (mk-closure ctx args))
+(defprimitive lambda ((exprs nil :rest))
+  (mk-closure ctx exprs))
 
 ; fixed
-(defun maru-primitive-let (ctx args)
+(defprimitive let ((bindings list-object) (exprs nil :rest))
   (let ((child-ctx nil))
     (setf child-ctx (maru-spawn-child-env ctx))
-    (dolist (arg-param (maru-list-to-internal-list-1 (maru-car args)))
+    (dolist (arg-param (maru-list-to-internal-list-1 bindings))
       (maru-define-new-binding
         child-ctx (maru-car arg-param)
                   (implicit-block-nice-eval (maru-cdr arg-param))))
-    (implicit-block-nice-eval (maru-cdr args) :_ctx child-ctx)))
+    (implicit-block-nice-eval exprs :_ctx child-ctx)))
 
 ; fixed
-(defun maru-primitive-while (ctx args)
-  (declare (ignore ctx))
+(defprimitive while ((test nil :optional) (exprs nil :rest))
   ;; return nil same as boot-eval.c
   (do ()
-      ((maru-nil? (nice-eval (maru-car args))) (maru-nil))
-    (implicit-block-nice-eval (maru-cdr args))))
+      ((maru-nil? (nice-eval test)) (maru-nil))
+    (implicit-block-nice-eval exprs)))
 
 ; expr
 (defprimitive add ((a abstract-long-object) (b abstract-long-object))
@@ -1108,7 +1086,7 @@
 
 ; fixed
 ; FIXME: make sure the symbol is actually internd
-(defprimitive seth ((symbol 'symbol-object) value)
+(defprimitive seth ((symbol symbol-object) value)
   (let ((binding (maru-lookup-raw ctx symbol)))
     (when (null binding)
       (error "``~a'' is undefined thus can not be set" symbol))
@@ -1164,10 +1142,9 @@
   (maru-expand->eval ctx expr))
 
 ; expr
-(defun maru-primitive-print (ctx args)
-  (declare (ignore ctx))
-  (dolist (a (maru-list-to-internal-list-1 args))
-    (format t "~A" (maru-printable-object a)))
+(defprimitive print ((values nil :rest))
+  (dolist (v (maru-list-to-internal-list-1 values))
+    (format t "~A" (maru-printable-object v)))
   (finish-output)
   (maru-nil))
 
@@ -1184,31 +1161,28 @@
         collect char))
 
 ; expr
-(defun maru-primitive-dump (ctx args)
-  (declare (ignore ctx))
-  (dolist (a (maru-list-to-internal-list-1 args))
-    (when (typep a 'string-object)
+(defprimitive dump ((values nil :rest))
+  (dolist (v (maru-list-to-internal-list-1 values))
+    (when (typep v 'string-object)
       (format t "\""))
     (let ((output ""))
-      (dolist (char (string-to-list (maru-printable-object a)) output)
+      (dolist (char (string-to-list (maru-printable-object v)) output)
         (setf output (scat output (octal-escape char))))
       (format t "~A" output)
-      (when (typep a 'string-object)
+      (when (typep v 'string-object)
         (format t "\""))))
   (finish-output)
   (maru-nil))
 
 ; expr
-(defun maru-primitive-warn (ctx args)
-  (declare (ignore ctx))
-  (format *error-output* "~A" (maru-printable-object args))
+(defprimitive warn ((values nil :rest))
+  (format *error-output* "~A" (maru-printable-object values))
   (finish-output *error-output*)
   (maru-nil))
 
 ; expr
-(defun maru-primitive-_list (ctx args)
-  (declare (ignore ctx))
-  args)
+(defprimitive _list ((values nil :rest))
+  values)
 
 ; expr
 (defprimitive string ((value number-object))
@@ -1274,7 +1248,7 @@
         (t (maru-nil))))
 
 ; expr
-(defprimitive form ((fn 'runtime-closure-object))
+(defprimitive form ((fn runtime-closure-object))
   (mk-form fn))
 
 ; expr
@@ -1365,16 +1339,15 @@
     (svref mem native-index)))
 
 ; expr
-(defun maru-primitive-exit (ctx args)
-  (declare (ignore ctx))
-  (let ((code (if (typep (maru-car args) 'number-object)
-                  (maru-car args)
+(defprimitive exit (exit-code)
+  (let ((code (if (typep exit-code 'number-object)
+                  exit-code
                   (mk-number 0))))
     (error 'exit-program-signal :code code)))
 
 ; expr
-(defun maru-primitive-abort (ctx args)
-  (declare (ignore ctx args))
+(defprimitive abort ((etc nil :rest))
+  (declare (ignore etc))
   (format t "aborted~%")
   (error 'exit-program-signal :code 1))
 
@@ -1388,20 +1361,20 @@
   (internal-list-to-maru-list (maru-env-bindings (maru-root-env ctx))))
 
 ; expr
-(defun maru-primitive-stack-trace (ctx args)
-  (declare (ignore ctx args))
+(defprimitive stack-trace ((etc nil :rest))
+  (declare (ignore etc))
   (st)
   (maru-nil))
 
 ; expr
-(defun maru-primitive-break (ctx args)
-  (declare (ignore ctx args))
+(defprimitive break ((etc nil :rest))
+  (declare (ignore etc))
   (break)
   (maru-nil))
 
 ; expr
-(defun maru-primitive-debug (ctx args)
-  (declare (ignore ctx args))
+(defprimitive debug ((etc nil :rest))
+  (declare (ignore etc))
   (setf *maru-debug* t)
   (maru-nil))
 
@@ -4420,27 +4393,74 @@
                              (mk-bool t) (mk-bool t))
                     (maru-all-transforms ctx src1)))))
 
-(deftest test-primitive-dsl
+(deftest test-primitive-dsl-expansion
+       ;; :rest before implicit :required
   (and (must-signal bad-primitive-arg-list
          (eval '(defprimitive p ((a nil :rest) b c)
                   nil)))
+       ;; :rest before explicit :required
+       (must-signal bad-primitive-arg-list
+         (eval '(defprimitive pp ((a nil :rest) (a nil :required))
+                  nil)))
+       ;; :rest before :optional
+       (must-signal bad-primitive-arg-list
+         (eval '(defprimitive rr ((a nil :rest) (b nil :optional))
+                  nil)))
+       ;; :optional before implicit :required
        (must-signal bad-primitive-arg-list
          (eval '(defprimitive q ((a nil :optional) b)
                   nil)))
+       ;; :optional before explicit :required
        (must-signal bad-primitive-arg-list
          (eval '(defprimitive r ((a nil :optional) (b nil :optional)
                                  (c nil :required))
                   nil)))
+       ;; too many fields on parameter
        (must-signal bad-primitive-arg-list
-         (eval '(defprimitive s ((a b c d))
+         (eval '(defprimitive s ((a b :optional d))
                   nil)))
+       ;; nil parameter name
        (must-signal bad-primitive-arg-list
          (eval '(defprimitive tt ((nil nil :required))
                   nil)))
+       ;; nil parameter status
+       (must-signal bad-primitive-arg-list
+         (eval '(defprimitive v ((z '(a b) nil))
+                  nil))
+       ;; nil parameter
        (must-signal bad-primitive-arg-list
          (eval '(defprimitive u (nil)
                   nil)))
+       ;; bad parameter status
        (must-signal bad-primitive-arg-list
-         (eval '(defprimitive v ((z '(a b) nil))
-                  nil)))))
+         (eval '(defprimitive v ((z '(a b) :cat))
+                  nil))))))
 
+(deftest test-primitive-dsl-runtime
+       ;; too few arguments
+  (and (must-signal bad-primitive-arg-list
+         (eval '(progn
+                  (defprimitive p-0 (a)
+                    a)
+                  (maru-primitive-p-0 nil (maru-nil)))))
+       ;; too few arguments
+       (must-signal bad-primitive-arg-list
+         (eval '(progn
+                  (defprimitive q-0 (a (b nil :rest))
+                    `(,a ,b))
+                  (maru-primitive-q-0 nil (maru-nil)))))
+       ;; use rest
+       (eq-object (mk-list (mk-number 1) (mk-number 2) (mk-number 3))
+                  (eval '(progn
+                           (defprimitive r-0 (a (b nil :rest))
+                             a b)
+                           (maru-primitive-r-0 nil
+                             (mk-list (mk-number 0) (mk-number 1)
+                                      (mk-number 2) (mk-number 3))))))
+       ;; mismatched type
+       (must-signal bad-primitive-arg-list
+         (eval '(progn
+                  (defprimitive s-0 ((a string-object))
+                    a)
+                  (maru-primitive-s-0 nil (mk-list
+                                            (mk-number 3))))))))
