@@ -1945,34 +1945,6 @@
                    (whatami (eql 'arg)))
   object)
 
-;; FIXME: support lead numbers
-(defmethod inform ((object number-object)
-                   (transformer-name (eql 'eval))
-                   (whatami (eql 'lead)))
-  (error "numbers shouldn't be lead!"))
-
-(defmethod pass ((object number-object)
-                 (transformer-name (eql 'eval))
-                 (args list-object))
-  (error "numbers shouldn't be lead!"))
-
-;;;;;;;;;; form object ;;;;;;;;;;
-
-(defmethod inform ((object form-object)
-                   (transformer-name (eql 'eval))
-                   (whatami (eql 'arg)))
-  (error "no expand args at eval time"))
-
-(defmethod inform ((object form-object)
-                   (transformer-name (eql 'eval))
-                   (whatami (eql 'lead)))
-  (error "no expand leads at eval time"))
-
-(defmethod pass ((object form-object)
-                 (transformer-name (eql 'eval))
-                 (args list-object))
-  (error "no expand passing at eval time"))
-
 ;;;;;;;;;; raw object ;;;;;;;;;;
 
 (defmethod inform ((object raw-object)
@@ -4204,7 +4176,6 @@
                    (define a 10)
                    (println \"hello \" a \"world\"))"))
     (maru-all-transforms ctx src)
-    ;; FIXME: test the output of some stream
     (let* ((stream (make-string-output-stream))
            (*standard-output* stream))
       (maru-all-transforms ctx use-it)
