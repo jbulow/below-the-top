@@ -29,7 +29,7 @@ First get the code from here http://code.google.com/p/maru/.
 Due to some differences between the original boot-eval.c and below-the-top you have to make some small adjustments.
 + emit.l
   + \*globals\* is not implemented in below-the-top; so you have to use _global-environment(...).
-  + In the function ``compile-end'' you should change what was originally <code>(cdr \*globals\*)</code> (and is not
+  + In the function ``compile-end'' you should change what was originally <code>(cdr \*globals\*)</code> (and is now
     <code>(cdr (\_global-environment))</code>) just <code>(_global-environment)</code>.  The cdr skips \*globals\*; but we don't have
     it.
   + variable \`\`forms'' does not quote {let, and, or, if, while, set, return} and variable ``operators'' unquotes
