@@ -37,3 +37,9 @@ Due to some differences between the original boot-eval.c and below-the-top you h
     symbols must be quoted. imaru (ian's maru) uses a function called ``encode'' that replaces symbols binded to
     Fixed and Expr before evaluation occurs; this is the behavior that emit.l is expecting.  below-the-top does not use
     an 'encode transformer.
+  + In variable ``forms'' you must also change ``set'' to ``seth''; bmaru (burrows maru) expands set expressions into a
+    function called ``seth'' because I didn't want to use the same symbol name for a Form and an Expr.
+  + In the function <code>(define-method gen <pair> (comp) ...)</code> there is a syntax error.  The innermost
+    ``let'' should be a ``let*''.  
++ At one point I also had to put spaces between symbols and doublequotes because the tokenizor wasn't up to the challenge; but I think this issue is now resolved.
+
