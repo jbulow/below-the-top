@@ -1218,10 +1218,8 @@
 (defprimitive long->string ((value nil :optional))
   (cond ((zerop @arg-count) (maru-nil))
         ((typep value 'string-object) value)
-        ((typep value 'number-object)
+        ((typep value 'abstract-long-object)
          (mk-string :value (object-value value)))
-        ((typep value 'char-object)
-         (error 'missing-feature))
         (t (maru-nil))))
 
 ; expr
@@ -4315,10 +4313,8 @@
 (deftest test-maru-primitive-long->string-with-char
   (let ((ctx (maru-initialize))
         (src "(long->string ?a)"))
-    (declare (ignore ctx src))
-    nil))
-    ; (eq-object (mk-string :value "a")
-               ; (maru-all-transforms ctx src))))
+    (eq-object (mk-string :value "97")
+               (maru-all-transforms ctx src))))
 
 (deftest test-read-octal
   (let ((ctx (maru-initialize))
