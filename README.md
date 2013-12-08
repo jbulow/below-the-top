@@ -53,5 +53,5 @@ If you issue <code>(test)</code> you should pass something like 164/166 tests (a
 
 Issue <code>(all)</code>.
 
-After the below-the-top finishes you should be able to view the output in \`\`cl-eval.s''.  Try ``diff''ing it with eval.s
+After below-the-top finishes you should be able to view the output in \`\`cl-eval.s''.  Try ``diff''ing it with eval.s
 from imaru.
