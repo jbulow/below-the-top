@@ -4268,7 +4268,7 @@
     (let* ((stream (make-string-output-stream))
            (*standard-output* stream))
       (maru-all-transforms ctx src)
-      (string= "\\002ambi?tion\\177"
+      (string= "\"\\002ambi?tion\\177\""
                (get-output-stream-string stream)))))
 
 (deftest test-maru-symbol?-primitive
