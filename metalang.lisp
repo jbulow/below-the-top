@@ -860,41 +860,42 @@
   (cond ((zerop index) (maru-car pair))
         (t (maru-nth (1- index) (maru-cdr pair)))))
 
-(defun build-type-assertions (params &optional (index 0))
+(defun build-type-assertions (params args &optional (index 0))
   (when (null params)
     (return-from build-type-assertions '()))
   (when (null (car params))
     (error "bad primitive argument"))
   (let ((option `(and ,(string= 'optional (caddar params))
-                      (>= ,index &arg-count&)))
+                      (>= ,index @arg-count)))
         (type
           (cond ((null (cadar params)) t)   ;; any type
                 (t
                  `(some #'(lambda (type)
-                            (typep (maru-nth ,index args) type))
+                            (typep (maru-nth ,index ,args) type))
                          ',(cadar params))))))
     (cons `(or ,option ,type)
-          (build-type-assertions (cdr params) (1+ index)))))
+          (build-type-assertions (cdr params) args (1+ index)))))
 
-(defun build-let-bindings (params &optional (index 0))
+(defun build-let-bindings (params args &optional (index 0))
   (cond ((null params) '())
         ((eq :rest (caddar params))
-         `((,(caar params) (maru-last args (- &arg-count& ,index)))))
-        (t (cons `(,(caar params) (maru-nth ,index args))
-                 (build-let-bindings (cdr params) (1+ index))))))
+         `((,(caar params) (maru-last ,args (- @arg-count ,index)))))
+        (t (cons `(,(caar params) (maru-nth ,index ,args))
+                 (build-let-bindings (cdr params) args (1+ index))))))
 
 (defmacro defprimitive (name params &rest body)
   (let* ((params (build-nice-params params))
-         (arg-range (get-arg-range params)))
+         (arg-range (get-arg-range params))
+         (args (gensym)))
     (let ((full-name (intern (scat "MARU-PRIMITIVE-" (to-string name)))))
-      `(defun ,full-name (ctx args)
-         (let ((&arg-count& (maru-length args)))
-           (primitive-assert (and (>= &arg-count& ,(car arg-range))
-                                  (<= &arg-count& ,(cdr arg-range))))
-           (primitive-assert (and ,@(build-type-assertions params)))
-           (noop ctx)
-           (noop &arg-count&)
-           (let (,@(build-let-bindings params))
+      `(defun ,full-name (@ctx ,args)
+         (let ((@arg-count (maru-length ,args)))
+           (primitive-assert (and (>= @arg-count ,(car arg-range))
+                                  (<= @arg-count ,(cdr arg-range))))
+           (primitive-assert (and ,@(build-type-assertions params args)))
+           (noop @ctx)
+           (noop @arg-count)
+           (let (,@(build-let-bindings params args))
              ,@body))))))
 
 ; form
@@ -961,7 +962,7 @@
 ; form
 ; FIXME: Should we be expanding here?
 (defprimitive define ((symbol symbol-object) value)
-  (cdr (maru-define ctx symbol (nice-eval value))))
+  (cdr (maru-define @ctx symbol (nice-eval value))))
 
 ; expr
 (defprimitive block ((exprs nil :rest))
@@ -971,12 +972,12 @@
 
 ; fixed
 (defprimitive lambda ((exprs nil :rest))
-  (mk-closure ctx exprs))
+  (mk-closure @ctx exprs))
 
 ; fixed
 (defprimitive let ((bindings list-object) (exprs nil :rest))
   (let ((child-ctx nil))
-    (setf child-ctx (maru-spawn-child-env ctx))
+    (setf child-ctx (maru-spawn-child-env @ctx))
     (dolist (arg-param (maru-list-to-internal-list-1 bindings))
       (maru-define-new-binding
         child-ctx (maru-car arg-param)
@@ -997,7 +998,7 @@
 ; expr
 (defprimitive sub ((a abstract-long-object)
                    (b abstract-long-object :optional))
-  (if (= 1 (maru-length args))
+  (if (= 1 @arg-count)
       (mk-number (- (object-value a)))
       (mk-number (- (object-value a) (object-value b)))))
 
@@ -1087,7 +1088,7 @@
 ; fixed
 ; FIXME: make sure the symbol is actually internd
 (defprimitive seth ((symbol symbol-object) value)
-  (let ((binding (maru-lookup-raw ctx symbol)))
+  (let ((binding (maru-lookup-raw @ctx symbol)))
     (when (null binding)
       (error "``~a'' is undefined thus can not be set" symbol))
     (setf (cdr binding) (nice-eval value))))
@@ -1122,7 +1123,6 @@
               (otherwise (error "unrecognized type")))))))
 
 ; expr
-; args <- function, [args], [environment]
 (defprimitive apply (fn
                      (fn-args list-object :optional)
                      (fn-env  list-object :optional))
@@ -1134,12 +1134,11 @@
   (pass fn 'eval fn-args))
 
 ; expr
-; args <- expression, [environment]
 (defprimitive eval (expr (env list-object :optional))
   ;; FIXME: use env if provided
   (or env (assert nil))
   ;; expansion ---> evaluation
-  (maru-expand->eval ctx expr))
+  (maru-expand->eval @ctx expr))
 
 ; expr
 (defprimitive print ((values nil :rest))
@@ -1219,7 +1218,7 @@
 ; expr
 ; > IDL: imaru implementation ignores extra args
 (defprimitive long->string ((value nil :optional))
-  (cond ((zerop (maru-length args)) (maru-nil))
+  (cond ((zerop @arg-count) (maru-nil))
         ((typep value 'string-object) value)
         ((typep value 'number-object)
          (mk-string :value (object-value value)))
@@ -1230,18 +1229,18 @@
 ; expr
 ; > IDL: imaru implementation ignores extra args
 (defprimitive string->symbol ((value nil :optional))
-  (cond ((zerop (maru-length args)) (maru-nil))
+  (cond ((zerop @arg-count) (maru-nil))
         ((typep value 'symbol-object) value)
         ((typep value 'string-object)
          ;; don't copy the null terminator
-         (maru-intern ctx (object-value
-                            (maru-string-to-symbol value))))
+         (maru-intern @ctx (object-value
+                             (maru-string-to-symbol value))))
         (t (maru-nil))))
 
 ; expr
 ; > IDL: imaru implementation ignores extra args
 (defprimitive symbol->string ((value nil :optional))
-  (cond ((zerop (maru-length args)) (maru-nil))
+  (cond ((zerop @arg-count) (maru-nil))
         ((typep value 'string-object) value)
         ((typep value 'symbol-object)
          (mk-string :value (object-value value)))
@@ -1256,7 +1255,7 @@
 ; IDL: imaru will take any arguments to 'array'; if the first argument
 ;      isn't a long it will create a size 0 array
 (defprimitive array ((size nil :optional))
-  (if (or (zerop (maru-length args))
+  (if (or (zerop @arg-count)
           (not (typep size 'abstract-long-object)))
       (mk-array 0)
       (mk-array (object-value size))))
@@ -1318,7 +1317,7 @@
 ; expr
 (defprimitive oop-at (raw index)
   ;; accout for the imaru nil exception
-  (when (maru-nil? (maru-car args))
+  (when (maru-nil? raw)
     (return-from maru-primitive-oop-at (maru-nil)))
   ;; HACK (required in gen-definition <expr>)
   (when (typep raw 'runtime-closure-object)
@@ -1354,11 +1353,12 @@
 ; expr
 ; > FIXME: this behavior is an approximation of correctness/imaru
 (defprimitive current-environment ()
-  (internal-list-to-maru-list (maru-env-bindings (maru-context-env ctx))))
+  (internal-list-to-maru-list
+    (maru-env-bindings (maru-context-env @ctx))))
 
 ; expr
 (defprimitive _global-environment ()
-  (internal-list-to-maru-list (maru-env-bindings (maru-root-env ctx))))
+  (internal-list-to-maru-list (maru-env-bindings (maru-root-env @ctx))))
 
 ; expr
 (defprimitive stack-trace ((etc nil :rest))
